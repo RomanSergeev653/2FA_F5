@@ -1,0 +1,8 @@
+aiogram==3.2.0
+python-dotenv==1.0.0
+cryptography==41.0.7
+aiofiles==23.2.1
+sqlalchemy==2.0.23
+alembic==1.12.1
+asyncpg==0.29.0
+python-decouple==3.8
