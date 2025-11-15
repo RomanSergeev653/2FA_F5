@@ -1,16 +1,75 @@
-# This is a sample Python script.
+import asyncio
+import logging
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+from config import BOT_TOKEN, DEBUG
+from database.models import init_database
+
+# Импортируем роутеры из handlers
+from handlers import start
+from handlers import registration
+from handlers import permissions
+from handlers import codes
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+async def main():
+    """
+    Главная функция запуска бота.
+    """
+    # Настройка логирования
+    if DEBUG:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+    else:
+        logging.basicConfig(level=logging.WARNING)
+
+    print("=" * 50)
+    print("🤖 Запуск Telegram бота для 2FA кодов")
+    print("=" * 50)
+
+    # Инициализируем базу данных
+    print("\n📦 Инициализация базы данных...")
+    init_database()
+
+    # Создаём бота и диспетчер
+    print("\n🔧 Создание бота...")
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
+
+    dp = Dispatcher()
+
+    # Подключаем роутеры (обработчики команд)
+    print("📝 Подключение обработчиков...")
+    dp.include_router(start.router)
+    dp.include_router(registration.router)
+    dp.include_router(permissions.router)
+    dp.include_router(codes.router)
+
+    print("\n✅ Бот готов к работе!")
+    print("Нажми Ctrl+C для остановки\n")
+
+    # Запускаем polling (бот начинает получать сообщения)
+    try:
+        await dp.start_polling(bot)
+    except KeyboardInterrupt:
+        print("\n\n👋 Остановка бота...")
+    finally:
+        await bot.session.close()
+        print("✅ Бот остановлен")
 
 
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    """
+    Точка входа в программу.
+    Запускаем асинхронную функцию main()
+    """
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 До свидания!")

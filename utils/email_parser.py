@@ -1,0 +1,425 @@
+import imaplib
+import email
+from email.header import decode_header
+import re
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict
+from config import IMAP_SETTINGS, CODE_REGEX, MAX_CODE_AGE_MINUTES, MAX_EMAILS_TO_CHECK
+
+
+class EmailParser:
+    """
+    Класс для работы с почтой через IMAP.
+    Подключается к почте, ищет коды в письмах.
+    """
+
+    def __init__(self, email_address: str, password: str, provider: str):
+        """
+        Инициализация парсера почты.
+
+        Args:
+            email_address: Email адрес (например, ivan@gmail.com)
+            password: Пароль приложения
+            provider: Провайдер (gmail, yandex, mail.ru, outlook)
+        """
+        self.email_address = email_address
+        self.password = password
+        self.provider = provider.lower()
+        self.connection = None
+
+    def connect(self) -> bool:
+        """
+        Подключиться к почтовому серверу.
+
+        Returns:
+            bool: True если подключение успешно
+        """
+        try:
+            # Получаем настройки сервера из config
+            if self.provider not in IMAP_SETTINGS:
+                print(f"❌ Неизвестный провайдер: {self.provider}")
+                return False
+
+            server_info = IMAP_SETTINGS[self.provider]
+            server = server_info['server']
+            port = server_info['port']
+
+            print(f"🔌 Подключаемся к {server}:{port}...")
+
+            # Создаём SSL соединение с почтовым сервером
+            self.connection = imaplib.IMAP4_SSL(server, port)
+
+            # Авторизуемся
+            self.connection.login(self.email_address, self.password)
+
+            print(f"✅ Успешно подключились к {self.email_address}")
+            return True
+
+        except imaplib.IMAP4.error as e:
+            print(f"❌ Ошибка авторизации IMAP: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ Ошибка подключения: {e}")
+            return False
+
+    def disconnect(self):
+        """
+        Отключиться от почтового сервера.
+        """
+        try:
+            if self.connection:
+                self.connection.logout()
+                print("👋 Отключились от почты")
+        except:
+            pass
+
+    def get_latest_emails(self, count: int = MAX_EMAILS_TO_CHECK) -> List[Dict]:
+        """
+        Получить последние N писем.
+
+        Args:
+            count: Количество писем (по умолчанию из config)
+
+        Returns:
+            List[Dict]: Список писем с полями: subject, from, date, body
+        """
+        try:
+            # Выбираем папку INBOX (входящие)
+            self.connection.select('INBOX')
+
+            # Ищем все письма
+            status, messages = self.connection.search(None, 'ALL')
+
+            if status != 'OK':
+                print("❌ Не удалось получить список писем")
+                return []
+
+            # messages[0] содержит строку с ID писем: b'1 2 3 4 5'
+            email_ids = messages[0].split()
+
+            if not email_ids:
+                print("📭 В почте нет писем")
+                return []
+
+            # Берём последние N писем (ID от большего к меньшему)
+            latest_ids = email_ids[-count:]
+            latest_ids.reverse()  # От новых к старым
+
+            emails = []
+
+            for email_id in latest_ids:
+                email_data = self._fetch_email(email_id)
+                if email_data:
+                    emails.append(email_data)
+
+            print(f"📬 Получено {len(emails)} писем")
+            return emails
+
+        except Exception as e:
+            print(f"❌ Ошибка получения писем: {e}")
+            return []
+
+    def _fetch_email(self, email_id: bytes) -> Optional[Dict]:
+        """
+        Получить данные одного письма.
+
+        Args:
+            email_id: ID письма
+
+        Returns:
+            Dict с полями письма или None
+        """
+        try:
+            # Получаем письмо по ID
+            status, msg_data = self.connection.fetch(email_id, '(RFC822)')
+
+            if status != 'OK':
+                return None
+
+            # Парсим письмо
+            raw_email = msg_data[0][1]
+            msg = email.message_from_bytes(raw_email)
+
+            # Извлекаем заголовки
+            subject = self._decode_header(msg['Subject'])
+            from_email = msg.get('From', '')
+            date_str = msg.get('Date', '')
+
+            # Извлекаем тело письма
+            body = self._get_email_body(msg)
+
+            # Парсим дату
+            email_date = self._parse_email_date(date_str)
+
+            return {
+                'subject': subject,
+                'from': from_email,
+                'date': email_date,
+                'body': body
+            }
+
+        except Exception as e:
+            print(f"❌ Ошибка парсинга письма {email_id}: {e}")
+            return None
+
+    def _decode_header(self, header: str) -> str:
+        """
+        Декодировать заголовок письма (может быть в разных кодировках).
+
+        Args:
+            header: Заголовок письма
+
+        Returns:
+            str: Декодированный текст
+        """
+        if not header:
+            return ''
+
+        try:
+            decoded_parts = decode_header(header)
+            decoded_str = ''
+
+            for part, encoding in decoded_parts:
+                if isinstance(part, bytes):
+                    # Декодируем байты в строку
+                    decoded_str += part.decode(encoding or 'utf-8', errors='ignore')
+                else:
+                    decoded_str += str(part)
+
+            return decoded_str
+
+        except Exception as e:
+            print(f"❌ Ошибка декодирования заголовка: {e}")
+            return str(header)
+
+    def _get_email_body(self, msg) -> str:
+        """
+        Извлечь текст письма (тело).
+
+        Args:
+            msg: Объект письма
+
+        Returns:
+            str: Текст письма
+        """
+        body = ''
+
+        try:
+            # Письмо может быть многочастным (текст + HTML + вложения)
+            if msg.is_multipart():
+                for part in msg.walk():
+                    content_type = part.get_content_type()
+
+                    # Ищем текстовые части
+                    if content_type == 'text/plain':
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            charset = part.get_content_charset() or 'utf-8'
+                            body += payload.decode(charset, errors='ignore')
+
+                    elif content_type == 'text/html':
+                        # HTML тоже может содержать код
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            charset = part.get_content_charset() or 'utf-8'
+                            html_text = payload.decode(charset, errors='ignore')
+                            body += self._strip_html(html_text)
+            else:
+                # Простое письмо (не multipart)
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    charset = msg.get_content_charset() or 'utf-8'
+                    body = payload.decode(charset, errors='ignore')
+
+            return body
+
+        except Exception as e:
+            print(f"❌ Ошибка извлечения тела письма: {e}")
+            return ''
+
+    def _strip_html(self, html: str) -> str:
+        """
+        Убрать HTML теги из текста (простая версия).
+
+        Args:
+            html: HTML текст
+
+        Returns:
+            str: Текст без тегов
+        """
+        # Убираем теги <script> и <style> с содержимым
+        html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+
+        # Убираем все HTML теги
+        text = re.sub(r'<[^>]+>', '', html)
+
+        # Убираем лишние пробелы
+        text = re.sub(r'\s+', ' ', text)
+
+        return text.strip()
+
+    def _parse_email_date(self, date_str: str) -> Optional[datetime]:
+        """
+        Парсить дату из заголовка письма.
+
+        Args:
+            date_str: Строка с датой
+
+        Returns:
+            datetime или None
+        """
+        try:
+            # Используем встроенный парсер email
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(date_str)
+        except:
+            return None
+
+    def find_codes_in_emails(self, emails: List[Dict]) -> List[Dict]:
+        """
+        Найти 2FA коды во всех письмах.
+
+        Args:
+            emails: Список писем из get_latest_emails()
+
+        Returns:
+            List[Dict]: Письма с найденными кодами
+                        Формат: {'email': {...}, 'codes': ['123456', '7890']}
+        """
+        results = []
+
+        for email_data in emails:
+            # Проверяем возраст письма
+            if not self._is_email_recent(email_data['date']):
+                continue
+
+            # Ищем коды в теле письма
+            body = email_data['body']
+            codes = self._extract_codes(body)
+
+            if codes:
+                results.append({
+                    'email': email_data,
+                    'codes': codes
+                })
+
+        return results
+
+    def _is_email_recent(self, email_date: Optional[datetime]) -> bool:
+        """
+        Проверить, что письмо не старше MAX_CODE_AGE_MINUTES.
+
+        Args:
+            email_date: Дата письма
+
+        Returns:
+            bool: True если письмо свежее
+        """
+        if not email_date:
+            return False
+
+        # Убираем информацию о часовом поясе для сравнения
+        if email_date.tzinfo:
+            email_date = email_date.replace(tzinfo=None)
+
+        now = datetime.now()
+        age = now - email_date
+
+        max_age = timedelta(minutes=MAX_CODE_AGE_MINUTES)
+
+        return age <= max_age
+
+    def _extract_codes(self, text: str) -> List[str]:
+        """
+        Извлечь коды из текста с помощью регулярных выражений.
+
+        Args:
+            text: Текст письма
+
+        Returns:
+            List[str]: Найденные коды
+        """
+        # Ищем все совпадения с паттерном
+        matches = re.findall(CODE_REGEX, text)
+
+        # Убираем дубликаты, сохраняя порядок
+        seen = set()
+        unique_codes = []
+
+        for code in matches:
+            if code not in seen:
+                seen.add(code)
+                unique_codes.append(code)
+
+        return unique_codes
+
+    def get_latest_code(self) -> Optional[str]:
+        """
+        Главная функция: получить самый свежий 2FA код.
+
+        Returns:
+            str: Найденный код или None
+        """
+        try:
+            # Подключаемся
+            if not self.connect():
+                return None
+
+            # Получаем последние письма
+            emails = self.get_latest_emails()
+
+            if not emails:
+                print("📭 Писем не найдено")
+                return None
+
+            # Ищем коды
+            emails_with_codes = self.find_codes_in_emails(emails)
+
+            if not emails_with_codes:
+                print("🔍 Коды не найдены в письмах")
+                return None
+
+            # Берём первое письмо (самое свежее) с кодами
+            latest = emails_with_codes[0]
+            codes = latest['codes']
+
+            if codes:
+                code = codes[0]  # Первый код в письме
+                print(f"✅ Найден код: {code}")
+                return code
+
+            return None
+
+        except Exception as e:
+            print(f"❌ Ошибка получения кода: {e}")
+            return None
+
+        finally:
+            # Всегда отключаемся
+            self.disconnect()
+
+
+# Тестирование
+if __name__ == '__main__':
+    print("📧 Тестирование парсера почты\n")
+
+    # Для теста нужны реальные данные
+    print("⚠️  Для тестирования нужны реальные данные почты:")
+    print("1. Email адрес")
+    print("2. Пароль приложения")
+    print("3. Провайдер (gmail/yandex/mail.ru/outlook)")
+    print("\nЗапусти этот файл и введи данные для теста")
+
+    # Раскомментируй для реального теста:
+    email_address = input("Email: ")
+    password = input("Пароль приложения: ")
+    provider = input("Провайдер: ")
+
+    parser = EmailParser(email_address, password, provider)
+    code = parser.get_latest_code()
+
+    if code:
+        print(f"\n🎉 Успешно! Найден код: {code}")
+    else:
+        print("\n😞 Код не найден")
