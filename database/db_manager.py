@@ -412,5 +412,55 @@ class DatabaseManager:
             print(f"❌ Ошибка записи лога: {e}")
 
 
+    @staticmethod
+    def delete_user(telegram_id: int) -> bool:
+        """
+        Полностью удалить пользователя и все связанные данные.
+
+        Args:
+            telegram_id: ID пользователя
+
+        Returns:
+            bool: True если успешно удалено
+        """
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            # Удаляем все разрешения где пользователь владелец
+            cursor.execute('''
+                DELETE FROM permissions
+                WHERE owner_id = ?
+            ''', (telegram_id,))
+
+            # Удаляем все разрешения где пользователь запрашивал доступ
+            cursor.execute('''
+                DELETE FROM permissions
+                WHERE requester_id = ?
+            ''', (telegram_id,))
+
+            # Удаляем логи пользователя
+            cursor.execute('''
+                DELETE FROM action_logs
+                WHERE user_id = ?
+            ''', (telegram_id,))
+
+            # Удаляем самого пользователя
+            cursor.execute('''
+                DELETE FROM users
+                WHERE telegram_id = ?
+            ''', (telegram_id,))
+
+            conn.commit()
+            conn.close()
+
+            print(f"🗑️ Удалены все данные пользователя {telegram_id}")
+            return True
+
+        except Exception as e:
+            print(f"❌ Ошибка удаления пользователя: {e}")
+            return False
+
+
 # Создаём глобальный экземпляр для удобного импорта
 db = DatabaseManager()
