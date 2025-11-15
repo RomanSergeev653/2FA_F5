@@ -13,11 +13,11 @@ from handlers import registration
 from handlers import permissions
 from handlers import codes
 
-
 async def main():
     """
     Главная функция запуска бота.
     """
+
     # Настройка логирования
     if DEBUG:
         logging.basicConfig(
@@ -56,13 +56,18 @@ async def main():
 
     # Запускаем polling (бот начинает получать сообщения)
     try:
+        # Пропускаем все накопившиеся сообщения
+        await bot.delete_webhook(drop_pending_updates=True)
+
+        print("⏭️  Все старые сообщения пропущены")
+
         await dp.start_polling(bot)
+
     except KeyboardInterrupt:
         print("\n\n👋 Остановка бота...")
     finally:
         await bot.session.close()
         print("✅ Бот остановлен")
-
 
 if __name__ == '__main__':
     """

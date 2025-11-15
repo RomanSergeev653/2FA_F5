@@ -129,10 +129,10 @@ async def cmd_get_code(message: Message):
 
             # Уведомляем владельца (опционально)
             try:
-                from main import bot
+                bot_instance = message.bot
                 requester_username = requester['username']
 
-                await bot.send_message(
+                await bot_instance.send_message(
                     chat_id=owner_id,
                     text=(
                         f"ℹ️ @{requester_username} получил твой 2FA код\n"
@@ -142,7 +142,7 @@ async def cmd_get_code(message: Message):
             except Exception as e:
                 print(f"⚠️ Не удалось уведомить владельца: {e}")
 
-            print(f"✅ Код передан: {owner['username']} → {requester['username']} | Код: {code}")
+            print(f"✅ Код передан: {owner['username']} → {requester['username']} | Код: НЕ ЛОГИРУЕТСЯ")
 
         else:
             # Код не найден

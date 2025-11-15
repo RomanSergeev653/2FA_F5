@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -262,10 +262,10 @@ async def process_unregister_confirm(callback: CallbackQuery):
     # Уведомляем тех, кто имел доступ к кодам этого пользователя
     for perm in permissions['given']:
         try:
-            from main import bot
+            bot_instance = callback.bot
             requester_id = perm['requester_id']
 
-            await bot.send_message(
+            await bot_instance.send_message(
                 chat_id=requester_id,
                 text=(
                     f"⚠️ <b>Доступ потерян</b>\n\n"
@@ -279,10 +279,10 @@ async def process_unregister_confirm(callback: CallbackQuery):
     # Уведомляем тех, к чьим кодам имел доступ этот пользователь
     for perm in permissions['received']:
         try:
-            from main import bot
+            bot_instance = callback.bot
             owner_id = perm['owner_id']
 
-            await bot.send_message(
+            await bot_instance.send_message(
                 chat_id=owner_id,
                 text=(
                     f"ℹ️ @{username} удалил свои данные из бота.\n"

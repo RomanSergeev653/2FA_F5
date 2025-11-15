@@ -149,13 +149,14 @@ class DatabaseManager:
     def create_permission_request(owner_id: int, requester_id: int) -> bool:
         """
         Создать запрос на доступ к кодам.
+        Если запрос уже существует - обновляет его статус на 'pending'.
 
         Args:
             owner_id: ID владельца почты
             requester_id: ID того, кто запрашивает доступ
 
         Returns:
-            bool: True если успешно создан
+            bool: True если успешно создан или обновлён
         """
         try:
             conn = get_connection()
@@ -163,26 +164,67 @@ class DatabaseManager:
 
             requested_at = datetime.now().isoformat()
 
+            # Проверяем, есть ли уже запись
             cursor.execute('''
-                INSERT INTO permissions (owner_id, requester_id, status, requested_at)
-                VALUES (?, ?, 'pending', ?)
-            ''', (owner_id, requester_id, requested_at))
+                SELECT status FROM permissions
+                WHERE owner_id = ? AND requester_id = ?
+            ''', (owner_id, requester_id))
 
-            conn.commit()
-            conn.close()
+            existing = cursor.fetchone()
 
-            # Логируем
-            DatabaseManager.log_action(
-                requester_id,
-                'permission_request',
-                f'Requested access to user {owner_id}'
-            )
+            if existing:
+                # Запись существует
+                status = existing['status']
 
-            return True
+                if status == 'pending':
+                    # Запрос уже ожидает ответа
+                    conn.close()
+                    return False
 
-        except sqlite3.IntegrityError:
-            # Запрос уже существует
-            return False
+                elif status == 'approved':
+                    # Разрешение уже дано (не должно сюда попасть, но проверим)
+                    conn.close()
+                    return False
+
+                elif status == 'denied':
+                    # Был отклонён ранее - обновляем на pending (повторный запрос)
+                    cursor.execute('''
+                        UPDATE permissions
+                        SET status = 'pending', requested_at = ?, responded_at = NULL
+                        WHERE owner_id = ? AND requester_id = ?
+                    ''', (requested_at, owner_id, requester_id))
+
+                    conn.commit()
+                    conn.close()
+
+                    # Логируем
+                    DatabaseManager.log_action(
+                        requester_id,
+                        'permission_request_repeat',
+                        f'Re-requested access to user {owner_id}'
+                    )
+
+                    return True
+
+            else:
+                # Записи нет - создаём новую
+                cursor.execute('''
+                    INSERT INTO permissions (owner_id, requester_id, status, requested_at)
+                    VALUES (?, ?, 'pending', ?)
+                ''', (owner_id, requester_id, requested_at))
+
+                conn.commit()
+                conn.close()
+
+                # Логируем
+                DatabaseManager.log_action(
+                    requester_id,
+                    'permission_request',
+                    f'Requested access to user {owner_id}'
+                )
+
+                return True
+
         except Exception as e:
             print(f"❌ Ошибка создания запроса: {e}")
             return False

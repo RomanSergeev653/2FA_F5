@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from database.db_manager import db
 
+
 # Создаём роутер
 router = Router()
 
@@ -109,7 +110,7 @@ async def cmd_request_access(message: Message, state: FSMContext):
 
     # Отправляем уведомление владельцу через бота
     try:
-        from main import bot  # Импортируем бота (будет доступен после запуска)
+        bot_instance = message.bot
 
         notification_text = (
             f"🔔 <b>Запрос доступа к твоим 2FA кодам</b>\n\n"
@@ -118,7 +119,7 @@ async def cmd_request_access(message: Message, state: FSMContext):
             f"Разрешить доступ?"
         )
 
-        await bot.send_message(
+        await bot_instance.send_message(
             chat_id=owner_id,
             text=notification_text,
             reply_markup=keyboard
@@ -166,12 +167,12 @@ async def process_approve(callback: CallbackQuery):
 
     # Уведомляем запрашивающего
     try:
-        from main import bot
+        bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
         owner_username = owner['username'] if owner else 'unknown'
 
-        await bot.send_message(
+        await bot_instance.send_message(
             chat_id=requester_id,
             text=(
                 f"✅ <b>Доступ получен!</b>\n\n"
@@ -213,12 +214,12 @@ async def process_deny(callback: CallbackQuery):
 
     # Уведомляем запрашивающего
     try:
-        from main import bot
+        bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
         owner_username = owner['username'] if owner else 'unknown'
 
-        await bot.send_message(
+        await bot_instance.send_message(
             chat_id=requester_id,
             text=(
                 f"❌ <b>Доступ отклонён</b>\n\n"
@@ -333,8 +334,9 @@ async def cmd_revoke(message: Message):
 
         # Уведомляем пользователя
         try:
-            from main import bot
-            await bot.send_message(
+            bot_instance = message.bot
+
+            await bot_instance.send_message(
                 chat_id=requester_id,
                 text=f"⚠️ @{owner['username']} отозвал доступ к своим кодам."
             )
@@ -344,3 +346,61 @@ async def cmd_revoke(message: Message):
         print(f"🔒 Отозван доступ: {owner_id} ⇢ {requester_id}")
     else:
         await message.answer(f"⚠️ У @{target_username} не было доступа к твоим кодам.")
+
+
+@router.message(Command('pending_requests'))
+async def cmd_pending_requests(message: Message):
+    """
+    Показать ожидающие запросы на доступ к твоим кодам.
+    """
+    user_id = message.from_user.id
+
+    # Проверяем регистрацию
+    user = db.get_user_by_telegram_id(user_id)
+    if not user:
+        await message.answer(
+            "❌ Сначала зарегистрируйся!\n"
+            "Используй /register"
+        )
+        return
+
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+
+        # Получаем pending запросы
+        cursor.execute('''
+            SELECT p.*, u.username as requester_username
+            FROM permissions p
+            JOIN users u ON p.requester_id = u.telegram_id
+            WHERE p.owner_id = ? AND p.status = 'pending'
+            ORDER BY p.requested_at DESC
+        ''', (user_id,))
+
+        pending = cursor.fetchall()
+        conn.close()
+
+        if not pending:
+            await message.answer(
+                "📭 Нет ожидающих запросов\n\n"
+                "Когда кто-то запросит доступ к твоим кодам,\n"
+                "ты получишь уведомление с кнопками."
+            )
+            return
+
+        text = "<b>⏳ Ожидающие запросы:</b>\n\n"
+
+        for req in pending:
+            username = req['requester_username']
+            req_time = req['requested_at'][:16]  # Обрезаем до минут
+
+            text += f"• @{username}\n"
+            text += f"  Запрошено: {req_time}\n\n"
+
+        text += "Ответить можно в уведомлении с кнопками."
+
+        await message.answer(text)
+
+    except Exception as e:
+        print(f"❌ Ошибка получения pending запросов: {e}")
+        await message.answer("❌ Ошибка получения данных")
