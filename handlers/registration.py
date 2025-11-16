@@ -263,6 +263,3 @@ def detect_email_provider(email: str) -> str:
         return 'outlook'
     else:
         return None
-
-# Оставь функции unregister без изменений
-# (process_unregister_confirm, cmd_unregister и т.д.)

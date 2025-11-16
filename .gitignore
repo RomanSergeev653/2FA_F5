@@ -1,12 +1,14 @@
-# Файл .gitignore
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# База данных
+database/bot.db
+database/*.db
 
 # Секретные данные
 .env
-
-# База данных
-*.db
-*.sqlite
-*.sqlite3
 
 # Python
 __pycache__/
@@ -14,11 +16,6 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-
-# Виртуальное окружение
-venv/
-env/
-ENV/
 
 # IDE
 .vscode/
@@ -30,6 +27,9 @@ ENV/
 logs/
 *.log
 
-# Временные файлы
+# OS
 .DS_Store
 Thumbs.db
+
+# Docker
+.dockerignore
