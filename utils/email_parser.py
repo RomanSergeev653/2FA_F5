@@ -2,7 +2,7 @@ import imaplib
 import email
 from email.header import decode_header
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 from config import IMAP_SETTINGS, CODE_REGEX, MAX_CODE_AGE_MINUTES, MAX_EMAILS_TO_CHECK
 
@@ -279,6 +279,7 @@ class EmailParser:
     def find_codes_in_emails(self, emails: List[Dict]) -> List[Dict]:
         """
         Найти 2FA коды во всех письмах.
+        УПРОЩЁННАЯ ВЕРСИЯ: ищем только в теме письма.
 
         Args:
             emails: Список писем из get_latest_emails()
@@ -292,17 +293,24 @@ class EmailParser:
         for email_data in emails:
             # Проверяем возраст письма
             if not self._is_email_recent(email_data['date']):
+                print(f"⏭️ Письмо слишком старое: {email_data['subject']}")
                 continue
 
-            # Ищем коды в теле письма
-            body = email_data['body']
-            codes = self._extract_codes(body)
+            # Ищем коды В ТЕМЕ письма
+            subject = email_data['subject']
+
+            print(f"🔍 Проверяю тему: {subject}")
+
+            codes = self._extract_codes_from_subject(subject)
 
             if codes:
+                print(f"✅ Найдены коды в теме: {codes}")
                 results.append({
                     'email': email_data,
                     'codes': codes
                 })
+            else:
+                print(f"❌ Коды не найдены в теме")
 
         return results
 
@@ -317,16 +325,33 @@ class EmailParser:
             bool: True если письмо свежее
         """
         if not email_date:
+            print("⚠️ Дата письма отсутствует")
             return False
 
-        # Убираем информацию о часовом поясе для сравнения
+        # Если у даты письма есть timezone - приводим к UTC
         if email_date.tzinfo:
-            email_date = email_date.replace(tzinfo=None)
+            # Конвертируем в UTC
+            email_date_utc = email_date.astimezone(timezone.utc)
+            # Убираем timezone для сравнения
+            email_date_naive = email_date_utc.replace(tzinfo=None)
+        else:
+            # Если timezone нет - считаем что это UTC
+            email_date_naive = email_date
 
-        now = datetime.now()
-        age = now - email_date
+        # Текущее время в UTC
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        # Вычисляем возраст
+        age = now_utc - email_date_naive
 
         max_age = timedelta(minutes=MAX_CODE_AGE_MINUTES)
+
+        # DEBUG
+        print(f"🕐 Дата письма (UTC): {email_date_naive}")
+        print(f"🕐 Сейчас (UTC): {now_utc}")
+        print(f"⏱️ Возраст письма: {age}")
+        print(f"⏱️ Максимальный возраст: {max_age}")
+        print(f"✅ Свежее? {age <= max_age}")
 
         return age <= max_age
 
@@ -354,6 +379,49 @@ class EmailParser:
 
         return unique_codes
 
+    def _extract_codes_from_subject(self, subject: str) -> List[str]:
+        """
+        Извлечь 2FA коды из ТЕМЫ письма.
+        Простой и надёжный метод.
+
+        Args:
+            subject: Тема письма
+
+        Returns:
+            List[str]: Найденные коды
+        """
+        import re
+
+        codes = []
+
+        # Паттерн 1: Ищем все 6-значные числа
+        pattern_6 = r'\b(\d{6})\b'
+        matches_6 = re.findall(pattern_6, subject)
+        codes.extend(matches_6)
+
+        # Паттерн 2: Ищем 7-значные числа (если нужно)
+        pattern_7 = r'\b(\d{7})\b'
+        matches_7 = re.findall(pattern_7, subject)
+        codes.extend(matches_7)
+
+        # Паттерн 3: Ищем 8-значные числа (если нужно)
+        pattern_8 = r'\b(\d{8})\b'
+        matches_8 = re.findall(pattern_8, subject)
+        codes.extend(matches_8)
+
+        # Убираем дубликаты
+        unique_codes = []
+        seen = set()
+
+        for code in codes:
+            if code not in seen:
+                seen.add(code)
+                unique_codes.append(code)
+
+        print(f"🔍 DEBUG: Найдено в теме '{subject}': {unique_codes}")
+
+        return unique_codes
+
     def get_latest_code(self) -> Optional[str]:
         """
         Главная функция: получить самый свежий 2FA код.
@@ -373,26 +441,46 @@ class EmailParser:
                 print("📭 Писем не найдено")
                 return None
 
+            print(f"\n📬 Найдено писем: {len(emails)}")
+
             # Ищем коды
             emails_with_codes = self.find_codes_in_emails(emails)
 
             if not emails_with_codes:
                 print("🔍 Коды не найдены в письмах")
+
+                # ОТЛАДКА: Покажем что нашли в письмах
+                print("\n🔍 Содержимое писем для отладки:")
+                for i, email_data in enumerate(emails[:3], 1):
+                    print(f"\n--- Письмо {i} ---")
+                    print(f"От: {email_data['from']}")
+                    print(f"Тема: {email_data['subject']}")
+                    print(f"Дата: {email_data['date']}")
+                    print(f"Первые 500 символов тела:\n{email_data['body'][:500]}")
+                    print("---\n")
+
                 return None
 
             # Берём первое письмо (самое свежее) с кодами
             latest = emails_with_codes[0]
             codes = latest['codes']
 
+            # ОТЛАДКА: Покажем все найденные коды
+            print(f"\n✅ Найдено кодов: {codes}")
+            print(f"📧 Письмо от: {latest['email']['from']}")
+            print(f"📧 Тема: {latest['email']['subject']}")
+
             if codes:
                 code = codes[0]  # Первый код в письме
-                print(f"✅ Найден код: {code}")
+                print(f"✅ Выбран код: {code}")
                 return code
 
             return None
 
         except Exception as e:
             print(f"❌ Ошибка получения кода: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
         finally:
