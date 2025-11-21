@@ -67,6 +67,8 @@ async def cmd_help(message: Message):
 
 <b>Шаг 3: Получить код</b>
 /get_code @username - получить последний 2FA код
+⭐️ Быстрый способ (NEW!):
+Просто напиши: @username
 
 <b>Другие команды:</b>
 /my_permissions - посмотреть свои разрешения

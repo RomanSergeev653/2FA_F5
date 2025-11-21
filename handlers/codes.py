@@ -1,4 +1,4 @@
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -50,7 +50,8 @@ async def cmd_get_code(message: Message):
     if target_username == requester['username']:
         await message.answer(
             "😅 Зачем получать свой код через бота?\n"
-            "Он приходит тебе на почту напрямую!"
+            "Он приходит тебе на почту напрямую!\n"
+            "Попробуй /test_code"
         )
         return
 
@@ -285,3 +286,19 @@ async def cmd_test_code(message: Message):
             f"❌ Ошибка при тестировании:\n"
             f"<code>{str(e)}</code>"
         )
+
+
+@router.message(F.text.regexp(r'^@[\w]+$'))
+async def handle_username_mention(message: Message):
+    """
+    Обработчик упоминания @username.
+    Автоматически получает код для указанного пользователя.
+
+    Работает как: /get_code @username
+    """
+    username_mention = message.text.strip()
+
+    # Создаём копию message с изменённым текстом
+    modified_message = message.model_copy(update={"text": f"/get_code {username_mention}"})
+
+    await cmd_get_code(modified_message)

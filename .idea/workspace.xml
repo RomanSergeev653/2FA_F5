@@ -4,13 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2742c60-7bb9-4716-b8d0-738c871bb028" name="Changes" comment="Добавлена обработка для почта на домене">
-      <change afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Dockerfile" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="f2742c60-7bb9-4716-b8d0-738c871bb028" name="Changes" comment="Добавил пример env и ещё файлы для сборки контейнера">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/handlers/registration.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/registration.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/handlers/codes.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/codes.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/handlers/start.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/start.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -55,6 +52,7 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "Python.main.executor": "Run",
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true"
   }
@@ -136,14 +134,34 @@
       <option name="project" value="LOCAL" />
       <updated>1763209223169</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="Добавил пример env и ещё файлы для сборки контейнера">
+      <option name="closed" value="true" />
+      <created>1763329165114</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1763329165114</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Создана структура" />
     <MESSAGE value="Собсна все файлы будут добавлены разом. Одна бессоная ночка" />
     <MESSAGE value="Внесены корректировки по получению бота из callback&#10;Протестировано" />
     <MESSAGE value="Добавлена обработка для почта на домене" />
-    <option name="LAST_COMMIT_MESSAGE" value="Добавлена обработка для почта на домене" />
+    <MESSAGE value="Добавил пример env и ещё файлы для сборки контейнера" />
+    <option name="LAST_COMMIT_MESSAGE" value="Добавил пример env и ещё файлы для сборки контейнера" />
   </component>
 </project>
