@@ -276,6 +276,7 @@ async def cmd_my_permissions(message: Message):
             username = perm['owner_username']
             text += f"• @{username}\n"
         text += f"\nПолучить код: /get_code @username\n"
+        text += f"\nNew!!! Используй только: @username\n"
     else:
         text += "📭 У тебя нет доступа к кодам коллег\n"
         text += "Запросить: /request_access @username"

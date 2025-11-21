@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2742c60-7bb9-4716-b8d0-738c871bb028" name="Changes" comment="Добавил пример env и ещё файлы для сборки контейнера">
+    <list default="true" id="f2742c60-7bb9-4716-b8d0-738c871bb028" name="Changes" comment="Добавил короткую версию команды /get_code">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/handlers/codes.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/codes.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/handlers/start.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/start.py" afterDir="false" />
@@ -142,7 +142,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763329165114</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Добавил короткую версию команды /get_code">
+      <option name="closed" value="true" />
+      <created>1763753250748</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1763753250748</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -162,6 +170,7 @@
     <MESSAGE value="Внесены корректировки по получению бота из callback&#10;Протестировано" />
     <MESSAGE value="Добавлена обработка для почта на домене" />
     <MESSAGE value="Добавил пример env и ещё файлы для сборки контейнера" />
-    <option name="LAST_COMMIT_MESSAGE" value="Добавил пример env и ещё файлы для сборки контейнера" />
+    <MESSAGE value="Добавил короткую версию команды /get_code" />
+    <option name="LAST_COMMIT_MESSAGE" value="Добавил короткую версию команды /get_code" />
   </component>
 </project>
