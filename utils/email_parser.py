@@ -346,13 +346,6 @@ class EmailParser:
 
         max_age = timedelta(minutes=MAX_CODE_AGE_MINUTES)
 
-        # DEBUG
-        print(f"🕐 Дата письма (UTC): {email_date_naive}")
-        print(f"🕐 Сейчас (UTC): {now_utc}")
-        print(f"⏱️ Возраст письма: {age}")
-        print(f"⏱️ Максимальный возраст: {max_age}")
-        print(f"✅ Свежее? {age <= max_age}")
-
         return age <= max_age
 
     def _extract_codes(self, text: str) -> List[str]:
@@ -448,31 +441,14 @@ class EmailParser:
 
             if not emails_with_codes:
                 print("🔍 Коды не найдены в письмах")
-
-                # ОТЛАДКА: Покажем что нашли в письмах
-                print("\n🔍 Содержимое писем для отладки:")
-                for i, email_data in enumerate(emails[:3], 1):
-                    print(f"\n--- Письмо {i} ---")
-                    print(f"От: {email_data['from']}")
-                    print(f"Тема: {email_data['subject']}")
-                    print(f"Дата: {email_data['date']}")
-                    print(f"Первые 500 символов тела:\n{email_data['body'][:500]}")
-                    print("---\n")
-
                 return None
 
             # Берём первое письмо (самое свежее) с кодами
             latest = emails_with_codes[0]
             codes = latest['codes']
 
-            # ОТЛАДКА: Покажем все найденные коды
-            print(f"\n✅ Найдено кодов: {codes}")
-            print(f"📧 Письмо от: {latest['email']['from']}")
-            print(f"📧 Тема: {latest['email']['subject']}")
-
             if codes:
                 code = codes[0]  # Первый код в письме
-                print(f"✅ Выбран код: {code}")
                 return code
 
             return None

@@ -51,7 +51,7 @@ async def cmd_get_code(message: Message):
         await message.answer(
             "😅 Зачем получать свой код через бота?\n"
             "Он приходит тебе на почту напрямую!\n"
-            "Попробуй /test_code"
+            "Попробуй /my_code"
         )
         return
 
@@ -231,10 +231,10 @@ async def cmd_check_email(message: Message):
         )
 
 
-@router.message(Command('test_code'))
+@router.message(Command('my_code'))
 async def cmd_test_code(message: Message):
     """
-    Протестировать получение своего кода (для отладки).
+    Получение своего кода (потому что это удобно).
     """
     user_id = message.from_user.id
 
