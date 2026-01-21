@@ -17,6 +17,13 @@ from utils.messages import (
 from utils.keyboards import (
     create_error_keyboard
 )
+from utils.security import (
+    validate_callback_data,
+    validate_email,
+    check_rate_limit,
+    RATE_LIMITS,
+    sanitize_error_message
+)
 
 # Создаём роутер
 router = Router()
@@ -39,6 +46,15 @@ async def cmd_register(message: Message, state: FSMContext):
     Начинает процесс регистрации почты.
     """
     user_id = message.from_user.id
+
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(user_id, 'register', *RATE_LIMITS['register'])
+    if not allowed:
+        await message.answer(
+            f"⏳ <b>Слишком много попыток регистрации!</b>\n\n"
+            f"Подожди {remaining} секунд перед следующей попыткой."
+        )
+        return
 
     # Проверяем, не зарегистрирован ли уже
     existing_user = db.get_user_by_telegram_id(user_id)
@@ -101,8 +117,29 @@ async def process_email_data(message: Message, state: FSMContext):
         )
         return
 
-    email = parts[0]
+    email = parts[0].strip().lower()
     password = ' '.join(parts[1:])  # Пароль может содержать пробелы
+
+    # Валидируем email
+    if not validate_email(email):
+        suggestions = [
+            "Проверить правильность написания email",
+            "Убедиться, что email содержит @ и домен",
+            "Пример правильного формата: user@example.com"
+        ]
+        error_text = format_error_message(
+            error_type='validation',
+            details="Некорректный email адрес",
+            suggestions=suggestions
+        )
+        keyboard = create_error_keyboard(action="register", show_help=False)
+        
+        await message.answer(
+            text=error_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        return
 
     # Определяем провайдера по домену
     provider = detect_email_provider(email)
@@ -147,7 +184,18 @@ async def process_platform_choice(callback: CallbackQuery, state: FSMContext):
     """
     Обработка выбора платформы для корпоративной почты.
     """
-    provider = callback.data.split('_')[1]
+    # Безопасно извлекаем провайдера
+    if not callback.data.startswith('platform_'):
+        await callback.answer("❌ Неверный запрос!", show_alert=True)
+        return
+    
+    provider = callback.data.replace('platform_', '', 1)
+    
+    # Валидируем провайдера
+    valid_providers = ['gmail', 'yandex', 'mail.ru', 'outlook']
+    if provider not in valid_providers:
+        await callback.answer("❌ Неверный провайдер!", show_alert=True)
+        return
 
     # Получаем сохранённые данные
     data = await state.get_data()
@@ -202,16 +250,41 @@ async def complete_registration(message: Message, state: FSMContext,
     # Проверяем подключение к почте
     parser = EmailParser(email, password, provider)
 
-    if not parser.connect():
+    try:
+        if not parser.connect():
+            suggestions = [
+                "Проверить правильность пароля приложения",
+                "Убедиться, что IMAP доступ включен в настройках почты",
+                "Проверить правильность выбранной платформы",
+                "Попробовать создать новый пароль приложения"
+            ]
+            error_text = format_error_message(
+                error_type='connection',
+                details="Не удалось подключиться к почте",
+                suggestions=suggestions
+            )
+            keyboard = create_error_keyboard(action="register", show_help=True)
+            
+            await checking_msg.edit_text(
+                text=error_text,
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+            await state.clear()
+            return
+    except Exception as e:
+        # Логируем полную ошибку
+        print(f"❌ Ошибка подключения к почте: {e}")
+        
+        # Пользователю показываем безопасное сообщение
         suggestions = [
-            "Проверить правильность пароля приложения",
-            "Убедиться, что IMAP доступ включен в настройках почты",
-            "Проверить правильность выбранной платформы",
-            "Попробовать создать новый пароль приложения"
+            "Проверить подключение к интернету",
+            "Попробовать позже",
+            "Обратиться к администратору"
         ]
         error_text = format_error_message(
             error_type='connection',
-            details="Не удалось подключиться к почте",
+            details="Ошибка подключения",
             suggestions=suggestions
         )
         keyboard = create_error_keyboard(action="register", show_help=True)
@@ -239,14 +312,16 @@ async def complete_registration(message: Message, state: FSMContext,
     )
 
     if not success:
+        # Логируем для администратора (без деталей)
+        print(f"❌ Ошибка сохранения пользователя {user_id} в БД")
+        
         suggestions = [
             "Попробовать позже",
-            "Обратиться к администратору",
-            "Проверить подключение к базе данных"
+            "Обратиться к администратору"
         ]
         error_text = format_error_message(
             error_type='generic',
-            details="Ошибка сохранения данных в базу",
+            details="Ошибка сохранения данных",
             suggestions=suggestions
         )
         keyboard = create_error_keyboard(action="register", show_help=True)
@@ -394,7 +469,12 @@ async def process_unregister_confirm(callback: CallbackQuery):
     Обработчик подтверждения удаления.
     """
     user_id = callback.from_user.id
-    confirmed_user_id = int(callback.data.split('_')[2])
+    
+    # Безопасно извлекаем ID пользователя
+    confirmed_user_id = validate_callback_data(callback.data, "unregister_confirm_")
+    if not confirmed_user_id:
+        await callback.answer("❌ Неверный запрос!", show_alert=True)
+        return
 
     # Проверка безопасности: удалять может только сам пользователь
     if user_id != confirmed_user_id:

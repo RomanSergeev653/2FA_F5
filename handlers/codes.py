@@ -20,6 +20,12 @@ from utils.messages import (
     format_user_list_message,
     format_progress_message
 )
+from utils.security import (
+    validate_callback_data,
+    check_rate_limit,
+    RATE_LIMITS,
+    sanitize_error_message
+)
 
 # Создаём роутер
 router = Router()
@@ -33,6 +39,7 @@ class GetCodeStates(StatesGroup):
 def is_email(text: str) -> bool:
     """
     Проверяет, является ли текст email адресом.
+    Использует улучшенную валидацию из utils.security.
     
     Args:
         text: Текст для проверки
@@ -40,16 +47,8 @@ def is_email(text: str) -> bool:
     Returns:
         bool: True если это похоже на email
     """
-    if '@' not in text:
-        return False
-    
-    parts = text.split('@')
-    if len(parts) != 2:
-        return False
-    
-    # Проверяем, что после @ есть точка и домен
-    domain = parts[1]
-    return '.' in domain and len(domain.split('.')[-1]) >= 2
+    from utils.security import validate_email
+    return validate_email(text)
 
 
 async def process_get_code(message: Message, target_input: str, requester: dict):
@@ -226,7 +225,11 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             print(f"⚠️ Код не найден для {owner['username']}")
 
     except Exception as e:
+        # Логируем полную ошибку для администратора
         print(f"❌ Ошибка получения кода: {e}")
+        
+        # Пользователю показываем безопасное сообщение
+        safe_error = sanitize_error_message(e)
         suggestions = [
             "Проверить подключение к интернету",
             f"Связаться с @{owner_username} для проверки настроек",
@@ -234,7 +237,7 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         ]
         error_text = format_error_message(
             error_type='connection',
-            details=f"Ошибка при получении кода от @{owner_username}",
+            details="Не удалось подключиться к почте",
             suggestions=suggestions
         )
         keyboard = create_error_keyboard(action="get_code", show_help=True)
@@ -257,6 +260,15 @@ async def cmd_get_code(message: Message, state: FSMContext):
         state: Контекст состояния FSM
     """
     requester_id = message.from_user.id
+
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(requester_id, 'get_code', *RATE_LIMITS['get_code'])
+    if not allowed:
+        await message.answer(
+            f"⏳ <b>Слишком много запросов!</b>\n\n"
+            f"Подожди {remaining} секунд перед следующим запросом."
+        )
+        return
 
     # Проверяем регистрацию запрашивающего
     requester = db.get_user_by_telegram_id(requester_id)
@@ -358,6 +370,15 @@ async def cmd_check_email(message: Message):
     """
     user_id = message.from_user.id
 
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(user_id, 'check_email', *RATE_LIMITS['check_email'])
+    if not allowed:
+        await message.answer(
+            f"⏳ <b>Слишком много запросов!</b>\n\n"
+            f"Подожди {remaining} секунд перед следующей проверкой."
+        )
+        return
+
     # Проверяем регистрацию
     user = db.get_user_by_telegram_id(user_id)
     if not user:
@@ -402,9 +423,13 @@ async def cmd_check_email(message: Message):
             )
 
     except Exception as e:
+        # Логируем полную ошибку
         print(f"❌ Ошибка проверки почты: {e}")
+        
+        # Пользователю показываем безопасное сообщение
+        safe_error = sanitize_error_message(e)
         await checking_msg.edit_text(
-            "❌ Ошибка проверки!\n"
+            "❌ Ошибка проверки подключения!\n\n"
             "Обратись к администратору."
         )
 
@@ -415,6 +440,15 @@ async def cmd_test_code(message: Message):
     Получение своего кода (потому что это удобно).
     """
     user_id = message.from_user.id
+
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(user_id, 'my_code', *RATE_LIMITS['my_code'])
+    if not allowed:
+        await message.answer(
+            f"⏳ <b>Слишком много запросов!</b>\n\n"
+            f"Подожди {remaining} секунд перед следующим запросом."
+        )
+        return
 
     # Проверяем регистрацию
     user = db.get_user_by_telegram_id(user_id)
@@ -459,10 +493,14 @@ async def cmd_test_code(message: Message):
             )
 
     except Exception as e:
+        # Логируем полную ошибку
         print(f"❌ Ошибка теста: {e}")
+        
+        # Пользователю показываем безопасное сообщение
+        safe_error = sanitize_error_message(e)
         await searching_msg.edit_text(
-            f"❌ Ошибка при тестировании:\n"
-            f"<code>{str(e)}</code>"
+            f"❌ Ошибка при тестировании\n\n"
+            f"{safe_error}"
         )
 
 
@@ -503,18 +541,38 @@ async def callback_get_code(callback: CallbackQuery):
         await callback.answer("Сначала зарегистрируйся!", show_alert=True)
         return
     
-    # Извлекаем ID владельца из callback_data
-    owner_id = int(callback.data.split("_")[-1])
-    owner = db.get_user_by_telegram_id(owner_id)
+    # Безопасно извлекаем ID владельца из callback_data
+    owner_id = validate_callback_data(callback.data, "get_code_")
+    if not owner_id:
+        await callback.answer("❌ Неверный запрос!", show_alert=True)
+        return
     
+    owner = db.get_user_by_telegram_id(owner_id)
     if not owner:
         await callback.answer("Пользователь не найден!", show_alert=True)
+        return
+    
+    # КРИТИЧНО: Проверяем права доступа перед получением кода
+    has_permission = db.check_permission(owner_id, requester_id)
+    if not has_permission:
+        await callback.answer(
+            f"🔒 У тебя нет доступа к кодам @{owner['username']}!", 
+            show_alert=True
+        )
+        return
+    
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(requester_id, 'get_code', *RATE_LIMITS['get_code'])
+    if not allowed:
+        await callback.answer(
+            f"⏳ Слишком много запросов! Подожди {remaining} сек.", 
+            show_alert=True
+        )
         return
     
     await callback.answer("Ищу код...")
     
     # Создаём временное сообщение для обработки
-    # Используем edit_text для обновления текущего сообщения
     await callback.message.edit_text(
         format_progress_message('searching', f"Ищу код в почте @{owner['username']}...")
     )
@@ -535,8 +593,18 @@ async def callback_get_code_page(callback: CallbackQuery):
         await callback.answer("Сначала зарегистрируйся!", show_alert=True)
         return
     
-    # Извлекаем номер страницы
-    page = int(callback.data.split("_")[-1])
+    # Безопасно извлекаем номер страницы
+    try:
+        page_str = callback.data.split("_")[-1]
+        if not page_str.isdigit():
+            await callback.answer("Неверный запрос!", show_alert=True)
+            return
+        page = int(page_str)
+        if page < 0:
+            page = 0
+    except (ValueError, IndexError):
+        await callback.answer("Неверный запрос!", show_alert=True)
+        return
     
     # Получаем список доступных пользователей
     permissions = db.get_my_permissions(requester_id)

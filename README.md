@@ -32,3 +32,57 @@ Telegram-бот для безопасного и удобного обмена 2
 - ⚡ **Высокая скорость работы** (получение кода занимает в среднем 5-10 секунд)
 
 _Создано с целью сделать 2FA удобным без компромиссов в безопасности._
+
+## 📁 Структура проекта
+
+```
+2FA_F5/
+├── main.py                 # Точка входа приложения
+├── config.py              # Конфигурация и настройки
+├── requirements.txt       # Python зависимости
+├── Dockerfile             # Docker образ
+├── docker-compose.yml     # Docker Compose конфигурация
+│
+├── database/              # Работа с базой данных
+│   ├── models.py         # Модели и инициализация БД
+│   └── db_manager.py     # Менеджер БД
+│
+├── handlers/              # Обработчики команд бота
+│   ├── start.py          # /start, /help, /menu, /tips
+│   ├── registration.py   # /register, /unregister
+│   ├── permissions.py    # /request_access, /my_permissions, /revoke
+│   └── codes.py          # /get_code, /my_code, /check_email
+│
+├── utils/                 # Утилиты
+│   ├── keyboards.py      # Генерация inline клавиатур
+│   ├── messages.py       # Шаблоны сообщений
+│   ├── security.py       # Безопасность (валидация, rate limiting)
+│   ├── email_parser.py   # Парсинг почты через IMAP
+│   └── encryption.py     # Шифрование паролей
+│
+├── docs/                  # Документация
+│   ├── PLAN.md           # План улучшений
+│   └── SECURITY_FIXES.md # Исправления уязвимостей
+│
+├── docker/                # Docker скрипты
+│   └── deploy.sh         # Скрипт автоматического деплоя
+│
+├── .github/               # CI/CD
+│   └── workflows/
+│       └── deploy.yml    # GitHub Actions для деплоя
+│
+└── logs/                  # Логи (не в git)
+```
+
+## 🚀 Быстрый старт
+
+См. [документацию по установке](docs/PLAN.md) или используйте Docker:
+
+```bash
+docker-compose up -d
+```
+
+## 📚 Документация
+
+- [План улучшений](docs/PLAN.md)
+- [Исправления безопасности](docs/SECURITY_FIXES.md)

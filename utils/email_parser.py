@@ -2,9 +2,13 @@ import imaplib
 import email
 from email.header import decode_header
 import re
+import socket
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 from config import IMAP_SETTINGS, CODE_REGEX, MAX_CODE_AGE_MINUTES, MAX_EMAILS_TO_CHECK
+
+# Timeout для IMAP операций (в секундах)
+IMAP_TIMEOUT = 30  # 30 секунд на подключение и операции
 
 
 class EmailParser:
@@ -46,10 +50,13 @@ class EmailParser:
 
             print(f"🔌 Подключаемся к {server}:{port}...")
 
+            # Устанавливаем timeout для socket операций
+            socket.setdefaulttimeout(IMAP_TIMEOUT)
+            
             # Создаём SSL соединение с почтовым сервером
-            self.connection = imaplib.IMAP4_SSL(server, port)
+            self.connection = imaplib.IMAP4_SSL(server, port, timeout=IMAP_TIMEOUT)
 
-            # Авторизуемся
+            # Авторизуемся с timeout
             self.connection.login(self.email_address, self.password)
 
             print(f"✅ Успешно подключились к {self.email_address}")

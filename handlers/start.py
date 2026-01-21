@@ -275,7 +275,13 @@ async def callback_menu_refresh(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("help_"))
 async def callback_help_section(callback: CallbackQuery):
     """Обработчик разделов справки"""
-    section = callback.data.replace("help_", "")
+    section = callback.data.replace("help_", "", 1)
+    
+    # Валидируем раздел справки
+    valid_sections = ['register', 'get_code', 'permissions', 'faq', 'tips']
+    if section not in valid_sections:
+        await callback.answer("❌ Неверный раздел!", show_alert=True)
+        return
     
     help_text = format_help_section(section)
     keyboard = create_help_keyboard()

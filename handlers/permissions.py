@@ -16,11 +16,19 @@ from utils.messages import (
     format_permission_granted,
     format_user_list_message
 )
+from utils.security import (
+    validate_callback_data,
+    validate_email,
+    check_rate_limit,
+    RATE_LIMITS,
+    sanitize_error_message
+)
 
 
 def is_email(text: str) -> bool:
     """
     Проверяет, является ли текст email адресом.
+    Использует улучшенную валидацию из utils.security.
     
     Args:
         text: Текст для проверки
@@ -28,16 +36,7 @@ def is_email(text: str) -> bool:
     Returns:
         bool: True если это похоже на email
     """
-    if '@' not in text:
-        return False
-    
-    parts = text.split('@')
-    if len(parts) != 2:
-        return False
-    
-    # Проверяем, что после @ есть точка и домен
-    domain = parts[1]
-    return '.' in domain and len(domain.split('.')[-1]) >= 2
+    return validate_email(text)
 
 
 # Создаём роутер
@@ -60,6 +59,19 @@ async def cmd_request_access(message: Message, state: FSMContext):
         state: Контекст состояния
     """
     requester_id = message.from_user.id
+
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(
+        requester_id, 
+        'request_access', 
+        *RATE_LIMITS['request_access']
+    )
+    if not allowed:
+        await message.answer(
+            f"⏳ <b>Слишком много запросов!</b>\n\n"
+            f"Подожди {remaining} секунд перед следующим запросом."
+        )
+        return
 
     # Проверяем, зарегистрирован ли запрашивающий
     requester = db.get_user_by_telegram_id(requester_id)
@@ -110,7 +122,11 @@ async def cmd_request_access(message: Message, state: FSMContext):
             return
             
         except Exception as e:
+            # Логируем полную ошибку
             print(f"❌ Ошибка получения списка пользователей: {e}")
+            
+            # Пользователю показываем безопасное сообщение
+            safe_error = sanitize_error_message(e)
             await message.answer(
                 "❌ Ошибка получения списка пользователей.\n"
                 "Попробуй указать username или email напрямую:\n"
@@ -244,7 +260,32 @@ async def process_approve(callback: CallbackQuery):
         callback: Callback от нажатия кнопки
     """
     owner_id = callback.from_user.id
-    requester_id = int(callback.data.split('_')[2])
+    
+    # Безопасно извлекаем ID запрашивающего
+    requester_id = validate_callback_data(callback.data, "perm_approve_")
+    if not requester_id:
+        await callback.answer("❌ Неверный запрос!", show_alert=True)
+        return
+    
+    # КРИТИЧНО: Проверяем, что это действительно запрос к кодам этого владельца
+    # Проверяем, существует ли pending запрос от этого requester_id к owner_id
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT status FROM permissions
+            WHERE owner_id = ? AND requester_id = ? AND status = 'pending'
+        ''', (owner_id, requester_id))
+        pending_request = cursor.fetchone()
+        conn.close()
+        
+        if not pending_request:
+            await callback.answer("❌ Запрос не найден или уже обработан!", show_alert=True)
+            return
+    except Exception as e:
+        print(f"❌ Ошибка проверки запроса: {e}")
+        await callback.answer("❌ Ошибка обработки запроса!", show_alert=True)
+        return
 
     # Обновляем статус в БД
     db.update_permission(owner_id, requester_id, 'approved')
@@ -297,7 +338,31 @@ async def process_deny(callback: CallbackQuery):
         callback: Callback от нажатия кнопки
     """
     owner_id = callback.from_user.id
-    requester_id = int(callback.data.split('_')[2])
+    
+    # Безопасно извлекаем ID запрашивающего
+    requester_id = validate_callback_data(callback.data, "perm_deny_")
+    if not requester_id:
+        await callback.answer("❌ Неверный запрос!", show_alert=True)
+        return
+    
+    # КРИТИЧНО: Проверяем, что это действительно запрос к кодам этого владельца
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT status FROM permissions
+            WHERE owner_id = ? AND requester_id = ? AND status = 'pending'
+        ''', (owner_id, requester_id))
+        pending_request = cursor.fetchone()
+        conn.close()
+        
+        if not pending_request:
+            await callback.answer("❌ Запрос не найден или уже обработан!", show_alert=True)
+            return
+    except Exception as e:
+        print(f"❌ Ошибка проверки запроса: {e}")
+        await callback.answer("❌ Ошибка обработки запроса!", show_alert=True)
+        return
 
     # Обновляем статус в БД
     db.update_permission(owner_id, requester_id, 'denied')
@@ -536,10 +601,13 @@ async def callback_request_access(callback: CallbackQuery):
         await callback.answer("Сначала зарегистрируйся!", show_alert=True)
         return
     
-    # Извлекаем ID владельца
-    owner_id = int(callback.data.split("_")[-1])
-    owner = db.get_user_by_telegram_id(owner_id)
+    # Безопасно извлекаем ID владельца
+    owner_id = validate_callback_data(callback.data, "request_access_")
+    if not owner_id:
+        await callback.answer("❌ Неверный запрос!", show_alert=True)
+        return
     
+    owner = db.get_user_by_telegram_id(owner_id)
     if not owner:
         await callback.answer("Пользователь не найден!", show_alert=True)
         return
@@ -547,6 +615,19 @@ async def callback_request_access(callback: CallbackQuery):
     # Проверяем, не себя ли запрашивает
     if owner_id == requester_id:
         await callback.answer("Нельзя запросить доступ к своим кодам!", show_alert=True)
+        return
+    
+    # Проверяем rate limit
+    allowed, remaining = check_rate_limit(
+        requester_id, 
+        'request_access', 
+        *RATE_LIMITS['request_access']
+    )
+    if not allowed:
+        await callback.answer(
+            f"⏳ Слишком много запросов! Подожди {remaining} сек.", 
+            show_alert=True
+        )
         return
     
     # Проверяем, нет ли уже разрешения
@@ -615,8 +696,18 @@ async def callback_request_access_page(callback: CallbackQuery):
         await callback.answer("Сначала зарегистрируйся!", show_alert=True)
         return
     
-    # Извлекаем номер страницы
-    page = int(callback.data.split("_")[-1])
+    # Безопасно извлекаем номер страницы
+    try:
+        page_str = callback.data.split("_")[-1]
+        if not page_str.isdigit():
+            await callback.answer("Неверный запрос!", show_alert=True)
+            return
+        page = int(page_str)
+        if page < 0:
+            page = 0
+    except (ValueError, IndexError):
+        await callback.answer("Неверный запрос!", show_alert=True)
+        return
     
     # Получаем всех пользователей кроме себя
     try:
@@ -663,6 +754,7 @@ async def callback_request_access_page(callback: CallbackQuery):
         await callback.answer()
         
     except Exception as e:
+        # Логируем полную ошибку
         print(f"❌ Ошибка получения списка пользователей: {e}")
         await callback.answer("Ошибка получения списка", show_alert=True)
 
