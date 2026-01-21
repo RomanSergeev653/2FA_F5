@@ -1,12 +1,25 @@
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+import time
 
 from database.db_manager import db
 from utils.encryption import decrypt_password
 from utils.email_parser import EmailParser
+from utils.keyboards import (
+    create_user_list_keyboard,
+    create_code_result_keyboard,
+    create_error_keyboard
+)
+from utils.messages import (
+    format_code_result,
+    format_code_not_found,
+    format_error_message,
+    format_user_list_message,
+    format_progress_message
+)
 
 # Создаём роутер
 router = Router()
@@ -113,10 +126,10 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         )
         return
 
-    # Отправляем сообщение о поиске
+    # Отправляем сообщение о поиске с прогрессом
+    start_time = time.time()
     searching_msg = await message.answer(
-        f"🔍 Ищу код в почте @{owner_username}...\n"
-        f"⏳ Это может занять несколько секунд"
+        format_progress_message('searching', f"Ищу код в почте @{owner_username}...")
     )
 
     # Расшифровываем пароль владельца
@@ -141,12 +154,23 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
 
         if code:
             # Код найден!
+            search_time = time.time() - start_time
+            result_text = format_code_result(
+                code=code,
+                owner_username=owner_username,
+                owner_email=email,
+                search_time=search_time
+            )
+            keyboard = create_code_result_keyboard(
+                owner_username=owner_username,
+                owner_id=owner_id,
+                can_retry=True
+            )
+            
             await searching_msg.edit_text(
-                f"✅ <b>Код найден!</b>\n\n"
-                f"🔐 Код: <code>{code}</code>\n\n"
-                f"👤 От: @{owner_username}\n"
-                f"📧 Почта: {email}\n\n"
-                f"💡 Нажми на код чтобы скопировать"
+                text=result_text,
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
 
             # Обновляем время последнего запроса
@@ -178,29 +202,47 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
 
         else:
             # Код не найден
+            suggestions = [
+                "Подождать несколько секунд",
+                "Попросить коллегу запросить новый код",
+                f"Повторить команду: /get_code @{owner_username}"
+            ]
+            not_found_text = format_code_not_found(
+                owner_username=owner_username,
+                suggestions=suggestions
+            )
+            keyboard = create_code_result_keyboard(
+                owner_username=owner_username,
+                owner_id=owner_id,
+                can_retry=True
+            )
+            
             await searching_msg.edit_text(
-                f"😞 <b>Код не найден</b>\n\n"
-                f"Возможные причины:\n"
-                f"• В последних письмах нет 2FA кодов\n"
-                f"• Коды старше 10 минут (устарели)\n"
-                f"• Письма с кодом ещё не пришли\n\n"
-                f"💡 Попробуй:\n"
-                f"• Подождать несколько секунд\n"
-                f"• Попросить коллегу запросить новый код\n"
-                f"• Повторить команду: <code>/get_code @{owner_username}</code>"
+                text=not_found_text,
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
 
             print(f"⚠️ Код не найден для {owner['username']}")
 
     except Exception as e:
         print(f"❌ Ошибка получения кода: {e}")
+        suggestions = [
+            "Проверить подключение к интернету",
+            f"Связаться с @{owner_username} для проверки настроек",
+            "Попробовать позже"
+        ]
+        error_text = format_error_message(
+            error_type='connection',
+            details=f"Ошибка при получении кода от @{owner_username}",
+            suggestions=suggestions
+        )
+        keyboard = create_error_keyboard(action="get_code", show_help=True)
+        
         await searching_msg.edit_text(
-            f"❌ <b>Ошибка подключения к почте!</b>\n\n"
-            f"Возможные причины:\n"
-            f"• Проблемы с подключением к серверу\n"
-            f"• Изменился пароль приложения у @{owner_username}\n"
-            f"• Временные проблемы у почтового провайдера\n\n"
-            f"Попробуй позже или свяжись с @{owner_username}"
+            text=error_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
         )
 
 
@@ -229,19 +271,49 @@ async def cmd_get_code(message: Message, state: FSMContext):
     args = message.text.split()
 
     if len(args) < 2:
-        # Нет аргументов - переводим в состояние ожидания ввода
+        # Нет аргументов - показываем список доступных пользователей
+        permissions = db.get_my_permissions(requester_id)
+        received = permissions.get('received', [])
+        
+        if not received:
+            await message.answer(
+                "📭 <b>Нет доступных пользователей</b>\n\n"
+                "У тебя пока нет разрешений на получение кодов.\n\n"
+                "Запроси доступ:\n"
+                "<code>/request_access @username</code>\n"
+                "или\n"
+                "<code>/request_access email@example.com</code>"
+            )
+            return
+        
+        # Формируем список пользователей с разрешениями
+        available_users = []
+        for perm in received:
+            owner_id = perm['owner_id']
+            owner = db.get_user_by_telegram_id(owner_id)
+            if owner:
+                available_users.append({
+                    'telegram_id': owner_id,
+                    'username': owner['username'],
+                    'email': owner['email']
+                })
+        
+        if not available_users:
+            await message.answer(
+                "📭 <b>Нет доступных пользователей</b>\n\n"
+                "Пользователи, давшие тебе доступ, больше не зарегистрированы."
+            )
+            return
+        
+        # Показываем список с кнопками
+        list_text = format_user_list_message(available_users, action="get_code")
+        keyboard = create_user_list_keyboard(available_users, action="get_code")
+        
         await message.answer(
-            "📝 Введи username или email коллеги:\n\n"
-            "Можно указать:\n"
-            "• <code>@username</code>\n"
-            "• <code>email@example.com</code>\n\n"
-            "Примеры:\n"
-            "<code>@ivan_petrov</code>\n"
-            "<code>ivan@gmail.com</code>\n\n"
-            "💡 Сначала нужно получить разрешение:\n"
-            "<code>/request_access @username</code>"
+            text=list_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
         )
-        await state.set_state(GetCodeStates.waiting_for_user_input)
         return
 
     target_input = args[1]
@@ -415,3 +487,108 @@ async def handle_username_mention(message: Message):
 
     username_mention = message.text.strip()
     await process_get_code(message, username_mention, requester)
+
+
+# Обработчики callback для кнопок
+@router.callback_query(F.data.startswith("get_code_"))
+async def callback_get_code(callback: CallbackQuery):
+    """
+    Обработчик кнопки получения кода из списка пользователей.
+    """
+    requester_id = callback.from_user.id
+    
+    # Проверяем регистрацию
+    requester = db.get_user_by_telegram_id(requester_id)
+    if not requester:
+        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
+        return
+    
+    # Извлекаем ID владельца из callback_data
+    owner_id = int(callback.data.split("_")[-1])
+    owner = db.get_user_by_telegram_id(owner_id)
+    
+    if not owner:
+        await callback.answer("Пользователь не найден!", show_alert=True)
+        return
+    
+    await callback.answer("Ищу код...")
+    
+    # Создаём временное сообщение для обработки
+    # Используем edit_text для обновления текущего сообщения
+    await callback.message.edit_text(
+        format_progress_message('searching', f"Ищу код в почте @{owner['username']}...")
+    )
+    
+    # Обрабатываем получение кода
+    await process_get_code(callback.message, owner['username'], requester)
+
+
+@router.callback_query(F.data.startswith("get_code_page_"))
+async def callback_get_code_page(callback: CallbackQuery):
+    """
+    Обработчик пагинации списка пользователей для получения кода.
+    """
+    requester_id = callback.from_user.id
+    requester = db.get_user_by_telegram_id(requester_id)
+    
+    if not requester:
+        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
+        return
+    
+    # Извлекаем номер страницы
+    page = int(callback.data.split("_")[-1])
+    
+    # Получаем список доступных пользователей
+    permissions = db.get_my_permissions(requester_id)
+    received = permissions.get('received', [])
+    
+    available_users = []
+    for perm in received:
+        owner_id = perm['owner_id']
+        owner = db.get_user_by_telegram_id(owner_id)
+        if owner:
+            available_users.append({
+                'telegram_id': owner_id,
+                'username': owner['username'],
+                'email': owner['email']
+            })
+    
+    if not available_users:
+        await callback.answer("Нет доступных пользователей", show_alert=True)
+        return
+    
+    # Вычисляем количество страниц
+    per_page = 5
+    total_pages = (len(available_users) + per_page - 1) // per_page
+    
+    # Показываем нужную страницу
+    list_text = format_user_list_message(
+        available_users[page * per_page:(page + 1) * per_page],
+        action="get_code",
+        page=page,
+        total_pages=total_pages
+    )
+    keyboard = create_user_list_keyboard(
+        available_users,
+        action="get_code",
+        page=page,
+        per_page=per_page
+    )
+    
+    await callback.message.edit_text(
+        text=list_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "retry_get_code")
+async def callback_retry_get_code(callback: CallbackQuery):
+    """
+    Обработчик кнопки "Попробовать снова" после ошибки.
+    """
+    await callback.answer("Используй /get_code для повторной попытки")
+    await callback.message.answer(
+        "Используй команду /get_code для получения кода"
+    )

@@ -10,6 +10,13 @@ from config import MESSAGES, IMAP_SETTINGS
 from database.db_manager import db
 from utils.encryption import encrypt_password
 from utils.email_parser import EmailParser
+from utils.messages import (
+    format_registration_success,
+    format_error_message
+)
+from utils.keyboards import (
+    create_error_keyboard
+)
 
 # Создаём роутер
 router = Router()
@@ -69,12 +76,28 @@ async def process_email_data(message: Message, state: FSMContext):
 
     # Проверяем формат
     if len(parts) < 2:
-        await message.answer(
-            "❌ Неправильный формат!\n\n"
-            "Отправь данные в формате:\n"
+        suggestions = [
+            "Использовать формат: email@example.com пароль_приложения",
+            "Убедиться, что пароль приложения скопирован полностью",
+            "Проверить, что между email и паролем есть пробел"
+        ]
+        error_text = format_error_message(
+            error_type='validation',
+            details="Неправильный формат данных",
+            suggestions=suggestions
+        )
+        error_text += (
+            "\n\n<b>Правильный формат:</b>\n"
             "<code>email@example.com пароль_приложения</code>\n\n"
-            "Пример:\n"
+            "<b>Пример:</b>\n"
             "<code>ivan@gmail.com abcd efgh ijkl mnop</code>"
+        )
+        keyboard = create_error_keyboard(action="register", show_help=False)
+        
+        await message.answer(
+            text=error_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
         )
         return
 
@@ -180,14 +203,23 @@ async def complete_registration(message: Message, state: FSMContext,
     parser = EmailParser(email, password, provider)
 
     if not parser.connect():
+        suggestions = [
+            "Проверить правильность пароля приложения",
+            "Убедиться, что IMAP доступ включен в настройках почты",
+            "Проверить правильность выбранной платформы",
+            "Попробовать создать новый пароль приложения"
+        ]
+        error_text = format_error_message(
+            error_type='connection',
+            details="Не удалось подключиться к почте",
+            suggestions=suggestions
+        )
+        keyboard = create_error_keyboard(action="register", show_help=True)
+        
         await checking_msg.edit_text(
-            "❌ Не удалось подключиться к почте!\n\n"
-            "Возможные причины:\n"
-            "• Неправильный пароль приложения\n"
-            "• Не включен доступ по IMAP\n"
-            "• Выбрана неправильная платформа\n\n"
-            "Проверь данные и попробуй снова:\n"
-            "/register"
+            text=error_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
         )
         await state.clear()
         return
@@ -207,22 +239,36 @@ async def complete_registration(message: Message, state: FSMContext,
     )
 
     if not success:
+        suggestions = [
+            "Попробовать позже",
+            "Обратиться к администратору",
+            "Проверить подключение к базе данных"
+        ]
+        error_text = format_error_message(
+            error_type='generic',
+            details="Ошибка сохранения данных в базу",
+            suggestions=suggestions
+        )
+        keyboard = create_error_keyboard(action="register", show_help=True)
+        
         await checking_msg.edit_text(
-            "❌ Ошибка сохранения данных!\n"
-            "Попробуй позже или обратись к администратору."
+            text=error_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
         )
         await state.clear()
         return
 
     # Успешная регистрация!
+    success_text = format_registration_success(
+        email=email,
+        provider=provider,
+        username=username
+    )
+    
     await checking_msg.edit_text(
-        "✅ <b>Регистрация успешна!</b>\n\n"
-        f"📧 Email: <code>{email}</code>\n"
-        f"🏢 Провайдер: {provider}\n\n"
-        "Теперь коллеги могут запросить доступ к твоим кодам через:\n"
-        f"/request_access @{username}\n\n"
-        "А ты можешь получать коды коллег (с их разрешения):\n"
-        "/get_code @username"
+        text=success_text,
+        parse_mode='HTML'
     )
 
     # Очищаем состояние

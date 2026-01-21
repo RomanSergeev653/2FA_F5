@@ -6,6 +6,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database.db_manager import db
+from utils.keyboards import (
+    create_permissions_keyboard,
+    create_user_list_keyboard,
+    create_confirm_keyboard
+)
+from utils.messages import (
+    format_permission_request,
+    format_permission_granted,
+    format_user_list_message
+)
 
 
 def is_email(text: str) -> bool:
@@ -64,19 +74,49 @@ async def cmd_request_access(message: Message, state: FSMContext):
     args = message.text.split()
 
     if len(args) < 2:
-        await message.answer(
-            "📝 Укажи username или email коллеги:\n\n"
-            "Формат:\n"
-            "• <code>/request_access @username</code>\n"
-            "• <code>/request_access email@example.com</code>\n\n"
-            "Примеры:\n"
-            "<code>/request_access @ivan_petrov</code>\n"
-            "<code>/request_access ivan@gmail.com</code>\n\n"
-            "💡 После получения доступа можно использовать:\n"
-            "<code>/get_code @username</code> или\n"
-            "<code>/get_code email@example.com</code>"
-        )
-        return
+        # Нет аргументов - показываем список зарегистрированных пользователей
+        # Получаем всех пользователей кроме себя
+        try:
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT telegram_id, username, email
+                FROM users
+                WHERE telegram_id != ?
+                ORDER BY username
+            ''', (requester_id,))
+            
+            all_users = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            
+            if not all_users:
+                await message.answer(
+                    "📭 <b>Нет других пользователей</b>\n\n"
+                    "В боте пока только ты зарегистрирован.\n"
+                    "Попроси коллег зарегистрироваться через /register"
+                )
+                return
+            
+            # Формируем список пользователей
+            list_text = format_user_list_message(all_users, action="request_access")
+            keyboard = create_user_list_keyboard(all_users, action="request_access")
+            
+            await message.answer(
+                text=list_text,
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+            return
+            
+        except Exception as e:
+            print(f"❌ Ошибка получения списка пользователей: {e}")
+            await message.answer(
+                "❌ Ошибка получения списка пользователей.\n"
+                "Попробуй указать username или email напрямую:\n"
+                "<code>/request_access @username</code>"
+            )
+            return
 
     target_input = args[1].lstrip('@')
     is_email_input = is_email(target_input)
@@ -297,7 +337,7 @@ async def process_deny(callback: CallbackQuery):
 @router.message(Command('my_permissions'))
 async def cmd_my_permissions(message: Message):
     """
-    Показать все разрешения пользователя.
+    Показать все разрешения пользователя с интерактивными кнопками.
     """
     user_id = message.from_user.id
 
@@ -321,31 +361,41 @@ async def cmd_my_permissions(message: Message):
 
     # Кому дал доступ
     if given:
-        text += "<b>✅ Кому ты дал доступ к своим кодам:</b>\n"
-        for perm in given:
+        text += f"<b>✅ Кому ты дал доступ ({len(given)}):</b>\n"
+        for perm in given[:5]:  # Показываем первых 5
             username = perm['requester_username']
             text += f"• @{username}\n"
-        text += f"\nОтозвать:\n"
-        text += f"<code>/revoke @username</code>\n\n"
+        if len(given) > 5:
+            text += f"... и ещё {len(given) - 5}\n"
+        text += "\n"
     else:
         text += "📭 Ты никому не давал доступ к своим кодам\n\n"
 
     # От кого получил доступ
     if received:
-        text += "<b>✅ От кого ты получил доступ к кодам:</b>\n"
-        for perm in received:
+        text += f"<b>📥 От кого получил доступ ({len(received)}):</b>\n"
+        for perm in received[:5]:  # Показываем первых 5
             username = perm['owner_username']
             text += f"• @{username}\n"
-        text += f"\nПолучить код:\n"
-        text += f"<code>/get_code @username</code>\n"
-        text += f"<code>/get_code email@example.com</code>\n\n"
+        if len(received) > 5:
+            text += f"... и ещё {len(received) - 5}\n"
+        text += "\n"
     else:
         text += "📭 У тебя нет доступа к кодам коллег\n\n"
-        text += "Запросить:\n"
-        text += "<code>/request_access @username</code>\n"
-        text += "<code>/request_access email@example.com</code>"
 
-    await message.answer(text)
+    text += "💡 Используй кнопки ниже для быстрых действий"
+
+    # Создаём клавиатуру с кнопками
+    keyboard = create_permissions_keyboard(
+        permissions=permissions,
+        show_get_code_buttons=True
+    )
+
+    await message.answer(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
 
 
 @router.message(Command('revoke'))
@@ -470,3 +520,303 @@ async def cmd_pending_requests(message: Message):
     except Exception as e:
         print(f"❌ Ошибка получения pending запросов: {e}")
         await message.answer("❌ Ошибка получения данных")
+
+
+# Обработчики callback для кнопок разрешений
+@router.callback_query(F.data.startswith("request_access_"))
+async def callback_request_access(callback: CallbackQuery):
+    """
+    Обработчик кнопки запроса доступа из списка пользователей.
+    """
+    requester_id = callback.from_user.id
+    
+    # Проверяем регистрацию
+    requester = db.get_user_by_telegram_id(requester_id)
+    if not requester:
+        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
+        return
+    
+    # Извлекаем ID владельца
+    owner_id = int(callback.data.split("_")[-1])
+    owner = db.get_user_by_telegram_id(owner_id)
+    
+    if not owner:
+        await callback.answer("Пользователь не найден!", show_alert=True)
+        return
+    
+    # Проверяем, не себя ли запрашивает
+    if owner_id == requester_id:
+        await callback.answer("Нельзя запросить доступ к своим кодам!", show_alert=True)
+        return
+    
+    # Проверяем, нет ли уже разрешения
+    if db.check_permission(owner_id, requester_id):
+        await callback.answer("У тебя уже есть доступ!", show_alert=True)
+        return
+    
+    # Создаём запрос
+    success = db.create_permission_request(owner_id, requester_id)
+    
+    if not success:
+        await callback.answer("Запрос уже отправлен ранее!", show_alert=True)
+        return
+    
+    # Отправляем уведомление владельцу
+    requester_username = requester['username']
+    requester_name = callback.from_user.first_name or requester_username
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Разрешить",
+                callback_data=f"perm_approve_{requester_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Запретить",
+                callback_data=f"perm_deny_{requester_id}"
+            )
+        ]
+    ])
+    
+    try:
+        bot_instance = callback.bot
+        notification_text = format_permission_request(
+            requester_username=requester_username,
+            requester_name=requester_name,
+            requester_email=requester['email']
+        )
+        
+        await bot_instance.send_message(
+            chat_id=owner_id,
+            text=notification_text,
+            reply_markup=keyboard
+        )
+        
+        await callback.answer("✅ Запрос отправлен!")
+        await callback.message.edit_text(
+            f"✅ Запрос отправлен @{owner['username']}!\n"
+            f"Ожидай ответа."
+        )
+        
+    except Exception as e:
+        print(f"❌ Ошибка отправки уведомления: {e}")
+        await callback.answer("⚠️ Запрос создан, но не удалось уведомить коллегу", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("request_access_page_"))
+async def callback_request_access_page(callback: CallbackQuery):
+    """
+    Обработчик пагинации списка пользователей для запроса доступа.
+    """
+    requester_id = callback.from_user.id
+    requester = db.get_user_by_telegram_id(requester_id)
+    
+    if not requester:
+        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
+        return
+    
+    # Извлекаем номер страницы
+    page = int(callback.data.split("_")[-1])
+    
+    # Получаем всех пользователей кроме себя
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT telegram_id, username, email
+            FROM users
+            WHERE telegram_id != ?
+            ORDER BY username
+        ''', (requester_id,))
+        
+        all_users = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        
+        if not all_users:
+            await callback.answer("Нет других пользователей", show_alert=True)
+            return
+        
+        # Вычисляем количество страниц
+        per_page = 5
+        total_pages = (len(all_users) + per_page - 1) // per_page
+        
+        # Показываем нужную страницу
+        list_text = format_user_list_message(
+            all_users[page * per_page:(page + 1) * per_page],
+            action="request_access",
+            page=page,
+            total_pages=total_pages
+        )
+        keyboard = create_user_list_keyboard(
+            all_users,
+            action="request_access",
+            page=page,
+            per_page=per_page
+        )
+        
+        await callback.message.edit_text(
+            text=list_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        await callback.answer()
+        
+    except Exception as e:
+        print(f"❌ Ошибка получения списка пользователей: {e}")
+        await callback.answer("Ошибка получения списка", show_alert=True)
+
+
+@router.callback_query(F.data == "permissions_given_list")
+async def callback_permissions_given_list(callback: CallbackQuery):
+    """
+    Показать список пользователей, которым дал доступ.
+    """
+    user_id = callback.from_user.id
+    permissions = db.get_my_permissions(user_id)
+    given = permissions.get('given', [])
+    
+    if not given:
+        await callback.answer("Ты никому не давал доступ", show_alert=True)
+        return
+    
+    text = "<b>✅ Кому ты дал доступ:</b>\n\n"
+    for perm in given:
+        username = perm['requester_username']
+        text += f"• @{username}\n"
+    
+    text += "\n💡 Используй /revoke @username для отзыва доступа"
+    
+    keyboard = create_permissions_keyboard(permissions, show_get_code_buttons=False)
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "permissions_received_list")
+async def callback_permissions_received_list(callback: CallbackQuery):
+    """
+    Показать список пользователей, от которых получил доступ.
+    """
+    user_id = callback.from_user.id
+    permissions = db.get_my_permissions(user_id)
+    received = permissions.get('received', [])
+    
+    if not received:
+        await callback.answer("У тебя нет доступа к кодам коллег", show_alert=True)
+        return
+    
+    text = "<b>📥 От кого получил доступ:</b>\n\n"
+    for perm in received:
+        username = perm['owner_username']
+        text += f"• @{username}\n"
+    
+    text += "\n💡 Используй /get_code @username для получения кода"
+    
+    keyboard = create_permissions_keyboard(permissions, show_get_code_buttons=True)
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "permissions_all")
+async def callback_permissions_all(callback: CallbackQuery):
+    """
+    Показать все разрешения.
+    """
+    user_id = callback.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    
+    if not user:
+        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
+        return
+    
+    permissions = db.get_my_permissions(user_id)
+    given = permissions['given']
+    received = permissions['received']
+    
+    text = "<b>🔐 Твои разрешения</b>\n\n"
+    
+    if given:
+        text += f"<b>✅ Кому дал доступ ({len(given)}):</b>\n"
+        for perm in given[:5]:
+            text += f"• @{perm['requester_username']}\n"
+        if len(given) > 5:
+            text += f"... и ещё {len(given) - 5}\n"
+        text += "\n"
+    else:
+        text += "📭 Ты никому не давал доступ\n\n"
+    
+    if received:
+        text += f"<b>📥 От кого получил доступ ({len(received)}):</b>\n"
+        for perm in received[:5]:
+            text += f"• @{perm['owner_username']}\n"
+        if len(received) > 5:
+            text += f"... и ещё {len(received) - 5}\n"
+        text += "\n"
+    else:
+        text += "📭 У тебя нет доступа к кодам коллег\n\n"
+    
+    text += "💡 Используй кнопки ниже для быстрых действий"
+    
+    keyboard = create_permissions_keyboard(permissions, show_get_code_buttons=True)
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "permissions_refresh")
+async def callback_permissions_refresh(callback: CallbackQuery):
+    """
+    Обновить список разрешений.
+    """
+    user_id = callback.from_user.id
+    permissions = db.get_my_permissions(user_id)
+    
+    given = permissions['given']
+    received = permissions['received']
+    
+    text = "<b>🔐 Твои разрешения</b>\n\n"
+    
+    if given:
+        text += f"<b>✅ Кому дал доступ ({len(given)}):</b>\n"
+        for perm in given[:5]:
+            text += f"• @{perm['requester_username']}\n"
+        if len(given) > 5:
+            text += f"... и ещё {len(given) - 5}\n"
+        text += "\n"
+    else:
+        text += "📭 Ты никому не давал доступ\n\n"
+    
+    if received:
+        text += f"<b>📥 От кого получил доступ ({len(received)}):</b>\n"
+        for perm in received[:5]:
+            text += f"• @{perm['owner_username']}\n"
+        if len(received) > 5:
+            text += f"... и ещё {len(received) - 5}\n"
+        text += "\n"
+    else:
+        text += "📭 У тебя нет доступа к кодам коллег\n\n"
+    
+    text += "✅ Обновлено!"
+    
+    keyboard = create_permissions_keyboard(permissions, show_get_code_buttons=True)
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer("✅ Обновлено")

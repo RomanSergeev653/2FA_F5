@@ -1,8 +1,18 @@
-
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from config import MESSAGES
+from database.db_manager import db
+from utils.keyboards import (
+    create_main_menu_keyboard,
+    create_help_keyboard
+)
+from utils.messages import (
+    format_user_status,
+    format_permissions_count,
+    format_help_section,
+    format_tips_message
+)
 
 # Создаём роутер для этого обработчика
 router = Router()
@@ -12,88 +22,267 @@ router = Router()
 async def cmd_start(message: Message):
     """
     Обработчик команды /start
-    Показывает приветствие и список команд.
+    Показывает приветствие и главное меню с кнопками.
 
     Args:
         message: Объект сообщения от пользователя
     """
+    user_id = message.from_user.id
     user_name = message.from_user.first_name or "друг"
-
-    welcome_text = MESSAGES['start']
-
+    
+    # Проверяем регистрацию
+    user = db.get_user_by_telegram_id(user_id)
+    is_registered = user is not None
+    
+    # Формируем приветствие
+    welcome_text = (
+        f"👋 Привет, {user_name}!\n\n"
+        f"{MESSAGES['start']}\n\n"
+    )
+    
+    # Добавляем статус пользователя
+    if is_registered:
+        welcome_text += f"{format_user_status(user)}\n\n"
+        # Добавляем статистику разрешений
+        permissions = db.get_my_permissions(user_id)
+        welcome_text += f"{format_permissions_count(permissions)}\n\n"
+    else:
+        welcome_text += "⚠️ Ты ещё не зарегистрирован!\n"
+        welcome_text += "Используй кнопку ниже для регистрации.\n\n"
+    
+    welcome_text += "💡 Используй кнопки ниже для быстрого доступа к функциям"
+    
+    # Создаём клавиатуру
+    keyboard = create_main_menu_keyboard(is_registered=is_registered)
+    
     await message.answer(
         text=welcome_text,
-        parse_mode='HTML'
+        parse_mode='HTML',
+        reply_markup=keyboard
     )
 
     # Логируем в консоль для отладки
-    print(f"👤 Пользователь {message.from_user.id} ({message.from_user.username}) запустил бота")
+    print(f"👤 Пользователь {user_id} ({message.from_user.username}) запустил бота")
+
+
+@router.message(Command('menu'))
+async def cmd_menu(message: Message):
+    """
+    Обработчик команды /menu
+    Показывает интерактивное главное меню.
+    """
+    user_id = message.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    is_registered = user is not None
+    
+    menu_text = "🏠 <b>Главное меню</b>\n\n"
+    
+    if is_registered:
+        menu_text += f"{format_user_status(user)}\n\n"
+        permissions = db.get_my_permissions(user_id)
+        menu_text += f"{format_permissions_count(permissions)}\n\n"
+    else:
+        menu_text += "❌ Ты ещё не зарегистрирован\n\n"
+    
+    menu_text += "Выбери действие:"
+    
+    keyboard = create_main_menu_keyboard(is_registered=is_registered)
+    
+    await message.answer(
+        text=menu_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
 
 
 @router.message(Command('help'))
 async def cmd_help(message: Message):
     """
     Обработчик команды /help
-    Показывает подробную справку.
+    Показывает интерактивную справку с разделами.
     """
-    help_text = """
-🤖 <b>Подробная справка по боту</b>
-
-<b>Шаг 1: Регистрация</b>
-Используй /register чтобы добавить свою почту.
-Тебе понадобится:
-• Email адрес
-• Пароль приложения (НЕ основной пароль!)
-
-<b>Как получить пароль приложения:</b>
-
-📧 <b>Gmail:</b>
-1. Перейди: https://myaccount.google.com/apppasswords
-2. Введи название приложения (например "TG Bot")
-3. Скопируй сгенерированный пароль (16 символов)
-
-📧 <b>Yandex:</b>
-1. Перейди: https://id.yandex.ru/security/app-passwords
-2. Создай новый пароль для приложения
-3. Скопируй пароль
-(Не забудь включить разрешение в Безопасности для использования SMTP и паролей приложений)
-
-📧 <b>Mail.ru:</b>
-1. Настройки → Пароль и безопасность
-2. Пароли для внешних приложений
-3. Создай новый пароль
-
-<b>Шаг 2: Запросить доступ</b>
-/request_access @username - запросить доступ к кодам коллеги
-
-<b>Шаг 3: Получить код</b>
-Есть несколько способов получить 2FA код:
-
-1️⃣ <b>Через команду с аргументом:</b>
-<code>/get_code @username</code> - по username
-<code>/get_code email@example.com</code> - по email ⭐(NEW!)
-
-2️⃣ <b>Интерактивный режим:</b>
-<code>/get_code</code> - затем введи @username или email ⭐(NEW!)
-
-3️⃣ <b>Быстрый способ:</b>
-Просто напиши: <code>@username</code>
-
-<b>Другие команды:</b>
-/my_permissions - посмотреть свои разрешения
-/revoke @username - отозвать доступ
-/my_code - получить код со своей почты ⭐(NEW!)
-
-❓ <b>Вопросы безопасности:</b>
-• Пароли хранятся в зашифрованном виде
-• Только ты контролируешь, кто видит твои коды
-• Можешь в любой момент отозвать доступ
-
-⚠️ <b>Важно:</b>
-Используй ПАРОЛЬ ПРИЛОЖЕНИЯ, а не основной пароль от почты!
-    """
-
+    help_text = (
+        "❓ <b>Справка по боту</b>\n\n"
+        "Выбери раздел справки:"
+    )
+    
+    keyboard = create_help_keyboard()
+    
     await message.answer(
         text=help_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+
+
+@router.message(Command('tips'))
+async def cmd_tips(message: Message):
+    """
+    Обработчик команды /tips
+    Показывает полезные советы.
+    """
+    tips_text = format_tips_message()
+    
+    keyboard = create_main_menu_keyboard(
+        is_registered=db.get_user_by_telegram_id(message.from_user.id) is not None
+    )
+    
+    await message.answer(
+        text=tips_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+
+
+# Обработчики callback для меню
+@router.callback_query(F.data == "menu_main")
+async def callback_menu_main(callback: CallbackQuery):
+    """Обработчик кнопки 'Главное меню'"""
+    user_id = callback.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    is_registered = user is not None
+    
+    menu_text = "🏠 <b>Главное меню</b>\n\n"
+    
+    if is_registered:
+        menu_text += f"{format_user_status(user)}\n\n"
+        permissions = db.get_my_permissions(user_id)
+        menu_text += f"{format_permissions_count(permissions)}\n\n"
+    else:
+        menu_text += "❌ Ты ещё не зарегистрирован\n\n"
+    
+    menu_text += "Выбери действие:"
+    
+    keyboard = create_main_menu_keyboard(is_registered=is_registered)
+    
+    await callback.message.edit_text(
+        text=menu_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu_register")
+async def callback_menu_register(callback: CallbackQuery):
+    """Обработчик кнопки 'Зарегистрироваться'"""
+    await callback.answer("Используй команду /register")
+    await callback.message.answer(
+        text=MESSAGES['register_start'],
         parse_mode='HTML'
     )
+
+
+@router.callback_query(F.data == "menu_get_code")
+async def callback_menu_get_code(callback: CallbackQuery):
+    """Обработчик кнопки 'Получить код'"""
+    await callback.answer("Используй команду /get_code")
+    await callback.message.answer(
+        text=(
+            "🔐 <b>Получить код</b>\n\n"
+            "Используй команду:\n"
+            "<code>/get_code @username</code>\n"
+            "или\n"
+            "<code>/get_code email@example.com</code>\n\n"
+            "Или просто напиши <code>/get_code</code> для интерактивного выбора"
+        ),
+        parse_mode='HTML'
+    )
+
+
+@router.callback_query(F.data == "menu_permissions")
+async def callback_menu_permissions(callback: CallbackQuery):
+    """Обработчик кнопки 'Мои разрешения'"""
+    await callback.answer("Используй команду /my_permissions")
+    await callback.message.answer(
+        text="Используй команду /my_permissions для просмотра разрешений",
+        parse_mode='HTML'
+    )
+
+
+@router.callback_query(F.data == "menu_request_access")
+async def callback_menu_request_access(callback: CallbackQuery):
+    """Обработчик кнопки 'Запросить доступ'"""
+    await callback.answer("Используй команду /request_access")
+    await callback.message.answer(
+        text=(
+            "➕ <b>Запросить доступ</b>\n\n"
+            "Используй команду:\n"
+            "<code>/request_access @username</code>\n"
+            "или\n"
+            "<code>/request_access email@example.com</code>"
+        ),
+        parse_mode='HTML'
+    )
+
+
+@router.callback_query(F.data == "menu_stats")
+async def callback_menu_stats(callback: CallbackQuery):
+    """Обработчик кнопки 'Статистика'"""
+    user_id = callback.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    
+    if not user:
+        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
+        return
+    
+    permissions = db.get_my_permissions(user_id)
+    stats_text = (
+        "📊 <b>Твоя статистика</b>\n\n"
+        f"{format_user_status(user)}\n\n"
+        f"{format_permissions_count(permissions)}"
+    )
+    
+    keyboard = create_main_menu_keyboard(is_registered=True)
+    
+    await callback.message.edit_text(
+        text=stats_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu_refresh")
+async def callback_menu_refresh(callback: CallbackQuery):
+    """Обработчик кнопки 'Обновить меню'"""
+    user_id = callback.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    is_registered = user is not None
+    
+    menu_text = "🏠 <b>Главное меню</b>\n\n"
+    
+    if is_registered:
+        menu_text += f"{format_user_status(user)}\n\n"
+        permissions = db.get_my_permissions(user_id)
+        menu_text += f"{format_permissions_count(permissions)}\n\n"
+    else:
+        menu_text += "❌ Ты ещё не зарегистрирован\n\n"
+    
+    menu_text += "Выбери действие:"
+    
+    keyboard = create_main_menu_keyboard(is_registered=is_registered)
+    
+    await callback.message.edit_text(
+        text=menu_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer("✅ Меню обновлено")
+
+
+# Обработчики callback для help
+@router.callback_query(F.data.startswith("help_"))
+async def callback_help_section(callback: CallbackQuery):
+    """Обработчик разделов справки"""
+    section = callback.data.replace("help_", "")
+    
+    help_text = format_help_section(section)
+    keyboard = create_help_keyboard()
+    
+    await callback.message.edit_text(
+        text=help_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+    await callback.answer()
