@@ -1,6 +1,8 @@
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 from database.db_manager import db
 from utils.encryption import decrypt_password
@@ -10,65 +12,94 @@ from utils.email_parser import EmailParser
 router = Router()
 
 
-@router.message(Command('get_code'))
-async def cmd_get_code(message: Message):
-    """
-    Получить последний 2FA код от коллеги.
-    Формат: /get_code @username
+# Состояния для получения кода
+class GetCodeStates(StatesGroup):
+    waiting_for_user_input = State()  # Ожидание ввода username или email
 
+
+def is_email(text: str) -> bool:
+    """
+    Проверяет, является ли текст email адресом.
+    
+    Args:
+        text: Текст для проверки
+        
+    Returns:
+        bool: True если это похоже на email
+    """
+    if '@' not in text:
+        return False
+    
+    parts = text.split('@')
+    if len(parts) != 2:
+        return False
+    
+    # Проверяем, что после @ есть точка и домен
+    domain = parts[1]
+    return '.' in domain and len(domain.split('.')[-1]) >= 2
+
+
+async def process_get_code(message: Message, target_input: str, requester: dict):
+    """
+    Обработка получения кода (общая логика для команды и состояния).
+    
     Args:
         message: Сообщение от пользователя
+        target_input: Username или email для поиска
+        requester: Данные запрашивающего пользователя
     """
-    requester_id = message.from_user.id
-
-    # Проверяем регистрацию запрашивающего
-    requester = db.get_user_by_telegram_id(requester_id)
-    if not requester:
-        await message.answer(
-            "❌ Сначала зарегистрируйся!\n"
-            "Используй /register"
-        )
-        return
-
-    # Проверяем аргументы команды
-    args = message.text.split()
-
-    if len(args) < 2:
-        await message.answer(
-            "📝 Укажи username коллеги:\n\n"
-            "Формат: <code>/get_code @username</code>\n\n"
-            "Пример:\n"
-            "<code>/get_code @ivan_petrov</code>\n\n"
-            "💡 Сначала нужно получить разрешение:\n"
-            "/request_access @username"
-        )
-        return
-
-    target_username = args[1].lstrip('@')
+    requester_id = requester['telegram_id']
+    target_input = target_input.lstrip('@')
+    is_email_input = is_email(target_input)
 
     # Проверяем, не пытается ли получить свой код (бессмысленно)
-    if target_username == requester['username']:
-        await message.answer(
-            "😅 Зачем получать свой код через бота?\n"
-            "Он приходит тебе на почту напрямую!\n"
-            "Попробуй /my_code"
-        )
-        return
+    if is_email_input:
+        # Если это email, проверяем по email
+        if target_input.lower() == requester['email'].lower():
+            await message.answer(
+                "😅 Зачем получать свой код через бота?\n"
+                "Он приходит тебе на почту напрямую!\n"
+                "Попробуй /my_code"
+            )
+            return
+    else:
+        # Если это username, проверяем по username
+        if target_input == requester['username']:
+            await message.answer(
+                "😅 Зачем получать свой код через бота?\n"
+                "Он приходит тебе на почту напрямую!\n"
+                "Попробуй /my_code"
+            )
+            return
 
     # Ищем владельца кодов в БД
-    owner = db.get_user_by_username(target_username)
-
-    if not owner:
-        await message.answer(
-            f"❌ Пользователь @{target_username} не найден!\n\n"
+    if is_email_input:
+        owner = db.get_user_by_email(target_input)
+        not_found_message = (
+            f"❌ Пользователь с email <code>{target_input}</code> не найден!\n\n"
+            "Возможные причины:\n"
+            "• Пользователь не зарегистрирован в боте\n"
+            "• Неправильно указан email\n\n"
+            "Попроси коллегу использовать /register"
+        )
+    else:
+        owner = db.get_user_by_username(target_input)
+        not_found_message = (
+            f"❌ Пользователь @{target_input} не найден!\n\n"
             "Возможные причины:\n"
             "• Пользователь не зарегистрирован в боте\n"
             "• Неправильно указан username\n\n"
-            "Попроси коллегу использовать /register"
+            "Попробуй использовать email:\n"
+            f"<code>/get_code email@example.com</code>\n\n"
+            "Или попроси коллегу использовать /register"
         )
+
+    if not owner:
+        await message.answer(not_found_message)
         return
 
     owner_id = owner['telegram_id']
+    owner_username = owner['username']
 
     # Проверяем разрешение
     has_permission = db.check_permission(owner_id, requester_id)
@@ -76,15 +107,15 @@ async def cmd_get_code(message: Message):
     if not has_permission:
         await message.answer(
             f"🔒 <b>Доступ запрещён!</b>\n\n"
-            f"У тебя нет разрешения на получение кодов от @{target_username}\n\n"
+            f"У тебя нет разрешения на получение кодов от @{owner_username}\n\n"
             f"Запросить доступ:\n"
-            f"/request_access @{target_username}"
+            f"<code>/request_access @{owner_username}</code>"
         )
         return
 
     # Отправляем сообщение о поиске
     searching_msg = await message.answer(
-        f"🔍 Ищу код в почте @{target_username}...\n"
+        f"🔍 Ищу код в почте @{owner_username}...\n"
         f"⏳ Это может занять несколько секунд"
     )
 
@@ -113,7 +144,7 @@ async def cmd_get_code(message: Message):
             await searching_msg.edit_text(
                 f"✅ <b>Код найден!</b>\n\n"
                 f"🔐 Код: <code>{code}</code>\n\n"
-                f"👤 От: @{target_username}\n"
+                f"👤 От: @{owner_username}\n"
                 f"📧 Почта: {email}\n\n"
                 f"💡 Нажми на код чтобы скопировать"
             )
@@ -125,7 +156,7 @@ async def cmd_get_code(message: Message):
             db.log_action(
                 user_id=requester_id,
                 action_type='code_retrieved',
-                details=f'Got code from {target_username}'
+                details=f'Got code from {owner_username}'
             )
 
             # Уведомляем владельца (опционально)
@@ -156,7 +187,7 @@ async def cmd_get_code(message: Message):
                 f"💡 Попробуй:\n"
                 f"• Подождать несколько секунд\n"
                 f"• Попросить коллегу запросить новый код\n"
-                f"• Повторить команду: /get_code @{target_username}"
+                f"• Повторить команду: <code>/get_code @{owner_username}</code>"
             )
 
             print(f"⚠️ Код не найден для {owner['username']}")
@@ -167,10 +198,85 @@ async def cmd_get_code(message: Message):
             f"❌ <b>Ошибка подключения к почте!</b>\n\n"
             f"Возможные причины:\n"
             f"• Проблемы с подключением к серверу\n"
-            f"• Изменился пароль приложения у @{target_username}\n"
+            f"• Изменился пароль приложения у @{owner_username}\n"
             f"• Временные проблемы у почтового провайдера\n\n"
-            f"Попробуй позже или свяжись с @{target_username}"
+            f"Попробуй позже или свяжись с @{owner_username}"
         )
+
+
+@router.message(Command('get_code'))
+async def cmd_get_code(message: Message, state: FSMContext):
+    """
+    Получить последний 2FA код от коллеги.
+    Формат: /get_code @username или /get_code email@example.com
+
+    Args:
+        message: Сообщение от пользователя
+        state: Контекст состояния FSM
+    """
+    requester_id = message.from_user.id
+
+    # Проверяем регистрацию запрашивающего
+    requester = db.get_user_by_telegram_id(requester_id)
+    if not requester:
+        await message.answer(
+            "❌ Сначала зарегистрируйся!\n"
+            "Используй /register"
+        )
+        return
+
+    # Проверяем аргументы команды
+    args = message.text.split()
+
+    if len(args) < 2:
+        # Нет аргументов - переводим в состояние ожидания ввода
+        await message.answer(
+            "📝 Введи username или email коллеги:\n\n"
+            "Можно указать:\n"
+            "• <code>@username</code>\n"
+            "• <code>email@example.com</code>\n\n"
+            "Примеры:\n"
+            "<code>@ivan_petrov</code>\n"
+            "<code>ivan@gmail.com</code>\n\n"
+            "💡 Сначала нужно получить разрешение:\n"
+            "<code>/request_access @username</code>"
+        )
+        await state.set_state(GetCodeStates.waiting_for_user_input)
+        return
+
+    target_input = args[1]
+    await process_get_code(message, target_input, requester)
+
+
+@router.message(GetCodeStates.waiting_for_user_input)
+async def process_user_input(message: Message, state: FSMContext):
+    """
+    Обработчик ввода username или email для получения кода.
+    
+    Args:
+        message: Сообщение с введенным username/email
+        state: Контекст состояния FSM
+    """
+    requester_id = message.from_user.id
+
+    # Проверяем регистрацию запрашивающего
+    requester = db.get_user_by_telegram_id(requester_id)
+    if not requester:
+        await message.answer(
+            "❌ Сначала зарегистрируйся!\n"
+            "Используй /register"
+        )
+        await state.clear()
+        return
+
+    # Получаем введенный текст
+    target_input = message.text.strip()
+    
+    # Очищаем состояние
+    await state.clear()
+    
+    # Обрабатываем запрос кода
+    await process_get_code(message, target_input, requester)
 
 
 @router.message(Command('check_email'))
@@ -296,9 +402,16 @@ async def handle_username_mention(message: Message):
 
     Работает как: /get_code @username
     """
+    requester_id = message.from_user.id
+
+    # Проверяем регистрацию запрашивающего
+    requester = db.get_user_by_telegram_id(requester_id)
+    if not requester:
+        await message.answer(
+            "❌ Сначала зарегистрируйся!\n"
+            "Используй /register"
+        )
+        return
+
     username_mention = message.text.strip()
-
-    # Создаём копию message с изменённым текстом
-    modified_message = message.model_copy(update={"text": f"/get_code {username_mention}"})
-
-    await cmd_get_code(modified_message)
+    await process_get_code(message, username_mention, requester)

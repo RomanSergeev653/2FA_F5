@@ -8,6 +8,28 @@ from aiogram.fsm.state import State, StatesGroup
 from database.db_manager import db
 
 
+def is_email(text: str) -> bool:
+    """
+    Проверяет, является ли текст email адресом.
+    
+    Args:
+        text: Текст для проверки
+        
+    Returns:
+        bool: True если это похоже на email
+    """
+    if '@' not in text:
+        return False
+    
+    parts = text.split('@')
+    if len(parts) != 2:
+        return False
+    
+    # Проверяем, что после @ есть точка и домен
+    domain = parts[1]
+    return '.' in domain and len(domain.split('.')[-1]) >= 2
+
+
 # Создаём роутер
 router = Router()
 
@@ -38,45 +60,78 @@ async def cmd_request_access(message: Message, state: FSMContext):
         )
         return
 
-    # Проверяем, указан ли username в команде
+    # Проверяем, указан ли username или email в команде
     args = message.text.split()
 
     if len(args) < 2:
         await message.answer(
-            "📝 Укажи username коллеги:\n\n"
-            "Формат: <code>/request_access @username</code>\n\n"
-            "Пример:\n"
-            "<code>/request_access @ivan_petrov</code>"
+            "📝 Укажи username или email коллеги:\n\n"
+            "Формат:\n"
+            "• <code>/request_access @username</code>\n"
+            "• <code>/request_access email@example.com</code>\n\n"
+            "Примеры:\n"
+            "<code>/request_access @ivan_petrov</code>\n"
+            "<code>/request_access ivan@gmail.com</code>\n\n"
+            "💡 После получения доступа можно использовать:\n"
+            "<code>/get_code @username</code> или\n"
+            "<code>/get_code email@example.com</code>"
         )
         return
 
-    target_username = args[1].lstrip('@')
+    target_input = args[1].lstrip('@')
+    is_email_input = is_email(target_input)
 
     # Проверяем, не себя ли запрашивает
-    if target_username == requester['username']:
-        await message.answer("😅 Нельзя запросить доступ к своим кодам!")
-        return
+    if is_email_input:
+        # Если это email, проверяем по email
+        if target_input.lower() == requester['email'].lower():
+            await message.answer("😅 Нельзя запросить доступ к своим кодам!")
+            return
+    else:
+        # Если это username, проверяем по username
+        if target_input == requester['username']:
+            await message.answer("😅 Нельзя запросить доступ к своим кодам!")
+            return
 
     # Ищем пользователя в БД
-    owner = db.get_user_by_username(target_username)
-
-    if not owner:
-        await message.answer(
-            f"❌ Пользователь @{target_username} не найден!\n\n"
+    if is_email_input:
+        owner = db.get_user_by_email(target_input)
+        not_found_message = (
+            f"❌ Пользователь с email <code>{target_input}</code> не найден!\n\n"
+            "Возможные причины:\n"
+            "• Пользователь ещё не зарегистрирован в боте\n"
+            "• Неправильно указан email\n\n"
+            "Попробуй использовать username:\n"
+            "<code>/request_access @username</code>\n\n"
+            "Или попроси коллегу использовать /register"
+        )
+    else:
+        owner = db.get_user_by_username(target_input)
+        not_found_message = (
+            f"❌ Пользователь @{target_input} не найден!\n\n"
             "Возможные причины:\n"
             "• Пользователь ещё не зарегистрирован в боте\n"
             "• Неправильно указан username\n\n"
-            "Попроси коллегу использовать /register"
+            "Попробуй использовать email:\n"
+            "<code>/request_access email@example.com</code>\n\n"
+            "Или попроси коллегу использовать /register"
         )
+
+    if not owner:
+        await message.answer(not_found_message)
         return
+
+    owner_username = owner['username']
 
     owner_id = owner['telegram_id']
 
     # Проверяем, нет ли уже разрешения
     if db.check_permission(owner_id, requester_id):
         await message.answer(
-            f"✅ У тебя уже есть доступ к кодам @{target_username}!\n\n"
-            f"Получить код: /get_code @{target_username}"
+            f"✅ У тебя уже есть доступ к кодам @{owner_username}!\n\n"
+            f"Получить код:\n"
+            f"<code>/get_code @{owner_username}</code>\n"
+            f"<code>/get_code {owner['email']}</code>"
         )
         return
 
@@ -126,11 +181,11 @@ async def cmd_request_access(message: Message, state: FSMContext):
         )
 
         await message.answer(
-            f"✅ Запрос отправлен @{target_username}!\n"
+            f"✅ Запрос отправлен @{owner_username}!\n"
             f"Ожидай ответа."
         )
 
-        print(f"📤 Запрос доступа: {requester_username} → @{target_username}")
+        print(f"📤 Запрос доступа: {requester_username} → @{owner_username}")
 
     except Exception as e:
         print(f"❌ Ошибка отправки уведомления: {e}")
@@ -162,7 +217,8 @@ async def process_approve(callback: CallbackQuery):
     await callback.message.edit_text(
         f"✅ <b>Доступ разрешён</b>\n\n"
         f"Пользователь @{requester_username} теперь может получать твои 2FA коды.\n\n"
-        f"Отозвать доступ: /revoke @{requester_username}"
+        f"Отозвать доступ:\n"
+        f"<code>/revoke @{requester_username}</code>"
     )
 
     # Уведомляем запрашивающего
@@ -170,16 +226,20 @@ async def process_approve(callback: CallbackQuery):
         bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
-        owner_username = owner['username'] if owner else 'unknown'
-
-        await bot_instance.send_message(
-            chat_id=requester_id,
-            text=(
-                f"✅ <b>Доступ получен!</b>\n\n"
-                f"@{owner_username} разрешил доступ к своим кодам.\n\n"
-                f"Получить код: /get_code @{owner_username}"
+        if owner:
+            owner_username = owner['username']
+            owner_email = owner['email']
+            
+            await bot_instance.send_message(
+                chat_id=requester_id,
+                text=(
+                    f"✅ <b>Доступ получен!</b>\n\n"
+                    f"@{owner_username} разрешил доступ к своим кодам.\n\n"
+                    f"Получить код:\n"
+                    f"<code>/get_code @{owner_username}</code>\n"
+                    f"<code>/get_code {owner_email}</code>"
+                )
             )
-        )
     except Exception as e:
         print(f"❌ Ошибка уведомления запрашивающего: {e}")
 
@@ -265,7 +325,8 @@ async def cmd_my_permissions(message: Message):
         for perm in given:
             username = perm['requester_username']
             text += f"• @{username}\n"
-        text += f"\nОтозвать: /revoke @username\n\n"
+        text += f"\nОтозвать:\n"
+        text += f"<code>/revoke @username</code>\n\n"
     else:
         text += "📭 Ты никому не давал доступ к своим кодам\n\n"
 
@@ -275,11 +336,14 @@ async def cmd_my_permissions(message: Message):
         for perm in received:
             username = perm['owner_username']
             text += f"• @{username}\n"
-        text += f"\nПолучить код: /get_code @username\n"
-        text += f"\nNew!!! Используй только: @username\n"
+        text += f"\nПолучить код:\n"
+        text += f"<code>/get_code @username</code>\n"
+        text += f"<code>/get_code email@example.com</code>\n\n"
     else:
-        text += "📭 У тебя нет доступа к кодам коллег\n"
-        text += "Запросить: /request_access @username"
+        text += "📭 У тебя нет доступа к кодам коллег\n\n"
+        text += "Запросить:\n"
+        text += "<code>/request_access @username</code>\n"
+        text += "<code>/request_access email@example.com</code>"
 
     await message.answer(text)
 
@@ -307,7 +371,8 @@ async def cmd_revoke(message: Message):
     if len(args) < 2:
         await message.answer(
             "📝 Укажи username:\n\n"
-            "Формат: <code>/revoke @username</code>\n\n"
+            "Формат:\n"
+            "<code>/revoke @username</code>\n\n"
             "Пример:\n"
             "<code>/revoke @ivan_petrov</code>"
         )

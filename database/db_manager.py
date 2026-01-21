@@ -120,6 +120,36 @@ class DatabaseManager:
             return None
 
     @staticmethod
+    def get_user_by_email(email: str) -> Optional[Dict]:
+        """
+        Получить пользователя по email адресу.
+
+        Args:
+            email: Email адрес
+
+        Returns:
+            Dict с данными пользователя или None
+        """
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT * FROM users WHERE email = ?
+            ''', (email.lower(),))
+
+            user = cursor.fetchone()
+            conn.close()
+
+            if user:
+                return dict(user)
+            return None
+
+        except Exception as e:
+            print(f"❌ Ошибка получения пользователя по email: {e}")
+            return None
+
+    @staticmethod
     def update_last_code_request(telegram_id: int):
         """
         Обновить время последнего запроса кода.
