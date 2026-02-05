@@ -276,7 +276,9 @@ async def complete_registration(message: Message, state: FSMContext,
         # Логируем полную ошибку
         print(f"❌ Ошибка подключения к почте: {e}")
         
-        # Пользователю показываем безопасное сообщение
+        # Пользователю показываем безопасное, но информативное сообщение
+        from utils.security import sanitize_error_message
+        safe_error = sanitize_error_message(e)
         suggestions = [
             "Проверить подключение к интернету",
             "Попробовать позже",
@@ -284,7 +286,7 @@ async def complete_registration(message: Message, state: FSMContext,
         ]
         error_text = format_error_message(
             error_type='connection',
-            details="Ошибка подключения",
+            details=safe_error,
             suggestions=suggestions
         )
         keyboard = create_error_keyboard(action="register", show_help=True)

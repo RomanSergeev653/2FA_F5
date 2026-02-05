@@ -125,10 +125,11 @@ async def cmd_request_access(message: Message, state: FSMContext):
             # Логируем полную ошибку
             print(f"❌ Ошибка получения списка пользователей: {e}")
             
-            # Пользователю показываем безопасное сообщение
+            # Пользователю показываем безопасное, но более информативное сообщение
             safe_error = sanitize_error_message(e)
             await message.answer(
-                "❌ Ошибка получения списка пользователей.\n"
+                "❌ Ошибка получения списка пользователей.\n\n"
+                f"{safe_error}\n\n"
                 "Попробуй указать username или email напрямую:\n"
                 "<code>/request_access @username</code>"
             )
@@ -284,7 +285,12 @@ async def process_approve(callback: CallbackQuery):
             return
     except Exception as e:
         print(f"❌ Ошибка проверки запроса: {e}")
-        await callback.answer("❌ Ошибка обработки запроса!", show_alert=True)
+        # Показываем безопасное, но информативное сообщение пользователю
+        safe_error = sanitize_error_message(e)
+        await callback.answer(
+            f"❌ Ошибка обработки запроса.\n{safe_error}",
+            show_alert=True
+        )
         return
 
     # Обновляем статус в БД
@@ -361,7 +367,12 @@ async def process_deny(callback: CallbackQuery):
             return
     except Exception as e:
         print(f"❌ Ошибка проверки запроса: {e}")
-        await callback.answer("❌ Ошибка обработки запроса!", show_alert=True)
+        # Показываем безопасное, но информативное сообщение пользователю
+        safe_error = sanitize_error_message(e)
+        await callback.answer(
+            f"❌ Ошибка обработки запроса.\n{safe_error}",
+            show_alert=True
+        )
         return
 
     # Обновляем статус в БД
@@ -584,7 +595,11 @@ async def cmd_pending_requests(message: Message):
 
     except Exception as e:
         print(f"❌ Ошибка получения pending запросов: {e}")
-        await message.answer("❌ Ошибка получения данных")
+        safe_error = sanitize_error_message(e)
+        await message.answer(
+            "❌ Ошибка получения данных.\n\n"
+            f"{safe_error}"
+        )
 
 
 # Обработчики callback для кнопок разрешений
@@ -681,7 +696,12 @@ async def callback_request_access(callback: CallbackQuery):
         
     except Exception as e:
         print(f"❌ Ошибка отправки уведомления: {e}")
-        await callback.answer("⚠️ Запрос создан, но не удалось уведомить коллегу", show_alert=True)
+        safe_error = sanitize_error_message(e)
+        await callback.answer(
+            "⚠️ Запрос создан, но не удалось уведомить коллегу.\n"
+            f"{safe_error}",
+            show_alert=True
+        )
 
 
 @router.callback_query(F.data.startswith("request_access_page_"))
@@ -756,7 +776,11 @@ async def callback_request_access_page(callback: CallbackQuery):
     except Exception as e:
         # Логируем полную ошибку
         print(f"❌ Ошибка получения списка пользователей: {e}")
-        await callback.answer("Ошибка получения списка", show_alert=True)
+        safe_error = sanitize_error_message(e)
+        await callback.answer(
+            f"❌ Ошибка получения списка.\n{safe_error}",
+            show_alert=True
+        )
 
 
 @router.callback_query(F.data == "permissions_given_list")

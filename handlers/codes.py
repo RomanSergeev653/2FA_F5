@@ -140,9 +140,11 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
 
     except Exception as e:
         print(f"❌ Ошибка расшифрования пароля: {e}")
+        from utils.security import sanitize_error_message
+        safe_error = sanitize_error_message(e)
         await searching_msg.edit_text(
-            "❌ Ошибка расшифрования данных!\n"
-            "Обратись к администратору."
+            "❌ Ошибка расшифрования данных!\n\n"
+            f"{safe_error}"
         )
         return
 
@@ -228,7 +230,7 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         # Логируем полную ошибку для администратора
         print(f"❌ Ошибка получения кода: {e}")
         
-        # Пользователю показываем безопасное сообщение
+        # Пользователю показываем безопасное, но информативное сообщение
         safe_error = sanitize_error_message(e)
         suggestions = [
             "Проверить подключение к интернету",
@@ -237,7 +239,7 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         ]
         error_text = format_error_message(
             error_type='connection',
-            details="Не удалось подключиться к почте",
+            details=safe_error,
             suggestions=suggestions
         )
         keyboard = create_error_keyboard(action="get_code", show_help=True)
@@ -426,11 +428,11 @@ async def cmd_check_email(message: Message):
         # Логируем полную ошибку
         print(f"❌ Ошибка проверки почты: {e}")
         
-        # Пользователю показываем безопасное сообщение
+        # Пользователю показываем безопасное, но информативное сообщение
         safe_error = sanitize_error_message(e)
         await checking_msg.edit_text(
             "❌ Ошибка проверки подключения!\n\n"
-            "Обратись к администратору."
+            f"{safe_error}"
         )
 
 
