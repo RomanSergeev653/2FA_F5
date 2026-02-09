@@ -141,12 +141,14 @@ async def cmd_request_access(message: Message, state: FSMContext):
     # Проверяем, не себя ли запрашивает
     if is_email_input:
         # Если это email, проверяем по email
-        if target_input.lower() == requester['email'].lower():
+        requester_email = requester.get('email', '') if requester and isinstance(requester, dict) else ''
+        if requester_email and target_input.lower() == requester_email.lower():
             await message.answer("😅 Нельзя запросить доступ к своим кодам!")
             return
     else:
         # Если это username, проверяем по username
-        if target_input == requester['username']:
+        requester_username = requester.get('username', '') if requester and isinstance(requester, dict) else ''
+        if requester_username and target_input == requester_username:
             await message.answer("😅 Нельзя запросить доступ к своим кодам!")
             return
 
@@ -174,21 +176,25 @@ async def cmd_request_access(message: Message, state: FSMContext):
             "Или попроси коллегу использовать /register"
         )
 
-    if not owner:
+    if not owner or not isinstance(owner, dict):
         await message.answer(not_found_message)
         return
 
-    owner_username = owner['username']
-
-    owner_id = owner['telegram_id']
+    owner_username = owner.get('username', 'unknown')
+    owner_id = owner.get('telegram_id')
+    
+    if not owner_id:
+        await message.answer("❌ Ошибка: не удалось получить ID пользователя")
+        return
 
     # Проверяем, нет ли уже разрешения
     if db.check_permission(owner_id, requester_id):
+        owner_email = owner.get('email', 'N/A') if isinstance(owner, dict) else 'N/A'
         await message.answer(
             f"✅ У тебя уже есть доступ к кодам @{owner_username}!\n\n"
             f"Получить код:\n"
             f"<code>/get_code @{owner_username}</code>\n"
-            f"<code>/get_code {owner['email']}</code>"
+            f"<code>/get_code {owner_email}</code>"
         )
         return
 
@@ -203,7 +209,8 @@ async def cmd_request_access(message: Message, state: FSMContext):
         return
 
     # Отправляем уведомление владельцу
-    requester_username = requester['username']
+    requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
+    requester_email = requester.get('email', 'N/A') if requester and isinstance(requester, dict) else 'N/A'
     requester_name = message.from_user.first_name or requester_username
 
     # Создаём кнопки для ответа
@@ -227,7 +234,7 @@ async def cmd_request_access(message: Message, state: FSMContext):
         notification_text = (
             f"🔔 <b>Запрос доступа к твоим 2FA кодам</b>\n\n"
             f"👤 От: @{requester_username} ({requester_name})\n"
-            f"📧 Email: {requester['email']}\n\n"
+            f"📧 Email: {requester_email}\n\n"
             f"Разрешить доступ?"
         )
 
@@ -298,7 +305,7 @@ async def process_approve(callback: CallbackQuery):
 
     # Получаем данные запрашивающего
     requester = db.get_user_by_telegram_id(requester_id)
-    requester_username = requester['username'] if requester else 'unknown'
+    requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
 
     # Обновляем сообщение
     await callback.message.edit_text(
@@ -313,9 +320,9 @@ async def process_approve(callback: CallbackQuery):
         bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
-        if owner:
-            owner_username = owner['username']
-            owner_email = owner['email']
+        if owner and isinstance(owner, dict):
+            owner_username = owner.get('username', 'unknown')
+            owner_email = owner.get('email', 'N/A')
             
             await bot_instance.send_message(
                 chat_id=requester_id,
@@ -380,7 +387,7 @@ async def process_deny(callback: CallbackQuery):
 
     # Получаем данные запрашивающего
     requester = db.get_user_by_telegram_id(requester_id)
-    requester_username = requester['username'] if requester else 'unknown'
+    requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
 
     # Обновляем сообщение
     await callback.message.edit_text(
@@ -393,7 +400,7 @@ async def process_deny(callback: CallbackQuery):
         bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
-        owner_username = owner['username'] if owner else 'unknown'
+        owner_username = owner.get('username', 'unknown') if owner and isinstance(owner, dict) else 'unknown'
 
         await bot_instance.send_message(
             chat_id=requester_id,
@@ -509,11 +516,14 @@ async def cmd_revoke(message: Message):
     # Ищем пользователя
     requester = db.get_user_by_username(target_username)
 
-    if not requester:
+    if not requester or not isinstance(requester, dict):
         await message.answer(f"❌ Пользователь @{target_username} не найден!")
         return
 
-    requester_id = requester['telegram_id']
+    requester_id = requester.get('telegram_id')
+    if not requester_id:
+        await message.answer("❌ Ошибка: не удалось получить ID пользователя")
+        return
 
     # Отзываем разрешение
     success = db.revoke_permission(owner_id, requester_id)
@@ -527,10 +537,11 @@ async def cmd_revoke(message: Message):
         # Уведомляем пользователя
         try:
             bot_instance = message.bot
+            owner_username = owner.get('username', 'unknown') if owner and isinstance(owner, dict) else 'unknown'
 
             await bot_instance.send_message(
                 chat_id=requester_id,
-                text=f"⚠️ @{owner['username']} отозвал доступ к своим кодам."
+                text=f"⚠️ @{owner_username} отозвал доступ к своим кодам."
             )
         except:
             pass
@@ -658,7 +669,8 @@ async def callback_request_access(callback: CallbackQuery):
         return
     
     # Отправляем уведомление владельцу
-    requester_username = requester['username']
+    requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
+    requester_email = requester.get('email', 'N/A') if requester and isinstance(requester, dict) else 'N/A'
     requester_name = callback.from_user.first_name or requester_username
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -679,7 +691,7 @@ async def callback_request_access(callback: CallbackQuery):
         notification_text = format_permission_request(
             requester_username=requester_username,
             requester_name=requester_name,
-            requester_email=requester['email']
+            requester_email=requester_email
         )
         
         await bot_instance.send_message(
@@ -689,8 +701,9 @@ async def callback_request_access(callback: CallbackQuery):
         )
         
         await callback.answer("✅ Запрос отправлен!")
+        owner_username = owner.get('username', 'unknown') if owner and isinstance(owner, dict) else 'unknown'
         await callback.message.edit_text(
-            f"✅ Запрос отправлен @{owner['username']}!\n"
+            f"✅ Запрос отправлен @{owner_username}!\n"
             f"Ожидай ответа."
         )
         

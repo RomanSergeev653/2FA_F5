@@ -60,14 +60,19 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         target_input: Username или email для поиска
         requester: Данные запрашивающего пользователя
     """
-    requester_id = requester['telegram_id']
+    requester_id = requester.get('telegram_id') if requester and isinstance(requester, dict) else None
+    if not requester_id:
+        await message.answer("❌ Ошибка: не удалось получить ID пользователя")
+        return
+    
     target_input = target_input.lstrip('@')
     is_email_input = is_email(target_input)
 
     # Проверяем, не пытается ли получить свой код (бессмысленно)
     if is_email_input:
         # Если это email, проверяем по email
-        if target_input.lower() == requester['email'].lower():
+        requester_email = requester.get('email', '') if isinstance(requester, dict) else ''
+        if requester_email and target_input.lower() == requester_email.lower():
             await message.answer(
                 "😅 Зачем получать свой код через бота?\n"
                 "Он приходит тебе на почту напрямую!\n"
@@ -76,7 +81,8 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             return
     else:
         # Если это username, проверяем по username
-        if target_input == requester['username']:
+        requester_username = requester.get('username', '') if isinstance(requester, dict) else ''
+        if requester_username and target_input == requester_username:
             await message.answer(
                 "😅 Зачем получать свой код через бота?\n"
                 "Он приходит тебе на почту напрямую!\n"
@@ -106,12 +112,16 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             "Или попроси коллегу использовать /register"
         )
 
-    if not owner:
+    if not owner or not isinstance(owner, dict):
         await message.answer(not_found_message)
         return
 
-    owner_id = owner['telegram_id']
-    owner_username = owner['username']
+    owner_id = owner.get('telegram_id')
+    owner_username = owner.get('username', 'unknown')
+    
+    if not owner_id:
+        await message.answer("❌ Ошибка: не удалось получить ID владельца")
+        return
 
     # Проверяем разрешение
     has_permission = db.check_permission(owner_id, requester_id)
@@ -133,10 +143,17 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
 
     # Расшифровываем пароль владельца
     try:
-        email = owner['email']
-        encrypted_password = owner['encrypted_password']
+        email = owner.get('email', '')
+        encrypted_password = owner.get('encrypted_password', '')
+        provider = owner.get('email_provider', '')
+        
+        if not email or not encrypted_password or not provider:
+            await searching_msg.edit_text(
+                "❌ Ошибка: неполные данные пользователя в базе данных"
+            )
+            return
+        
         password = decrypt_password(encrypted_password)
-        provider = owner['email_provider']
 
     except Exception as e:
         print(f"❌ Ошибка расшифрования пароля: {e}")
@@ -187,7 +204,7 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             # Уведомляем владельца (опционально)
             try:
                 bot_instance = message.bot
-                requester_username = requester['username']
+                requester_username = requester.get('username', 'unknown') if isinstance(requester, dict) else 'unknown'
 
                 await bot_instance.send_message(
                     chat_id=owner_id,
@@ -199,7 +216,9 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             except Exception as e:
                 print(f"⚠️ Не удалось уведомить владельца: {e}")
 
-            print(f"✅ Код передан: {owner['username']} → {requester['username']} | Код: НЕ ЛОГИРУЕТСЯ")
+            owner_username_log = owner.get('username', 'unknown') if isinstance(owner, dict) else 'unknown'
+            requester_username_log = requester.get('username', 'unknown') if isinstance(requester, dict) else 'unknown'
+            print(f"✅ Код передан: {owner_username_log} → {requester_username_log} | Код: НЕ ЛОГИРУЕТСЯ")
 
         else:
             # Код не найден
@@ -224,7 +243,8 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
                 reply_markup=keyboard
             )
 
-            print(f"⚠️ Код не найден для {owner['username']}")
+            owner_username_log = owner.get('username', 'unknown') if isinstance(owner, dict) else 'unknown'
+            print(f"⚠️ Код не найден для {owner_username_log}")
 
     except Exception as e:
         # Логируем полную ошибку для администратора
@@ -303,13 +323,15 @@ async def cmd_get_code(message: Message, state: FSMContext):
         # Формируем список пользователей с разрешениями
         available_users = []
         for perm in received:
-            owner_id = perm['owner_id']
+            owner_id = perm.get('owner_id') if isinstance(perm, dict) else None
+            if not owner_id:
+                continue
             owner = db.get_user_by_telegram_id(owner_id)
-            if owner:
+            if owner and isinstance(owner, dict):
                 available_users.append({
                     'telegram_id': owner_id,
-                    'username': owner['username'],
-                    'email': owner['email']
+                    'username': owner.get('username', 'unknown'),
+                    'email': owner.get('email', 'N/A')
                 })
         
         if not available_users:
@@ -383,7 +405,7 @@ async def cmd_check_email(message: Message):
 
     # Проверяем регистрацию
     user = db.get_user_by_telegram_id(user_id)
-    if not user:
+    if not user or not isinstance(user, dict):
         await message.answer(
             "❌ Сначала зарегистрируйся!\n"
             "Используй /register"
@@ -394,10 +416,15 @@ async def cmd_check_email(message: Message):
 
     try:
         # Расшифровываем данные
-        email = user['email']
-        encrypted_password = user['encrypted_password']
+        email = user.get('email', '')
+        encrypted_password = user.get('encrypted_password', '')
+        provider = user.get('email_provider', '')
+        
+        if not email or not encrypted_password or not provider:
+            await checking_msg.edit_text("❌ Ошибка: неполные данные в базе данных")
+            return
+        
         password = decrypt_password(encrypted_password)
-        provider = user['email_provider']
 
         # Пробуем подключиться
         parser = EmailParser(email, password, provider)
@@ -454,7 +481,7 @@ async def cmd_test_code(message: Message):
 
     # Проверяем регистрацию
     user = db.get_user_by_telegram_id(user_id)
-    if not user:
+    if not user or not isinstance(user, dict):
         await message.answer(
             "❌ Сначала зарегистрируйся!\n"
             "Используй /register"
@@ -468,10 +495,15 @@ async def cmd_test_code(message: Message):
 
     try:
         # Расшифровываем данные
-        email = user['email']
-        encrypted_password = user['encrypted_password']
+        email = user.get('email', '')
+        encrypted_password = user.get('encrypted_password', '')
+        provider = user.get('email_provider', '')
+        
+        if not email or not encrypted_password or not provider:
+            await searching_msg.edit_text("❌ Ошибка: неполные данные в базе данных")
+            return
+        
         password = decrypt_password(encrypted_password)
-        provider = user['email_provider']
 
         # Ищем код
         parser = EmailParser(email, password, provider)
@@ -550,15 +582,16 @@ async def callback_get_code(callback: CallbackQuery):
         return
     
     owner = db.get_user_by_telegram_id(owner_id)
-    if not owner:
+    if not owner or not isinstance(owner, dict):
         await callback.answer("Пользователь не найден!", show_alert=True)
         return
     
     # КРИТИЧНО: Проверяем права доступа перед получением кода
     has_permission = db.check_permission(owner_id, requester_id)
     if not has_permission:
+        owner_username = owner.get('username', 'unknown') if isinstance(owner, dict) else 'unknown'
         await callback.answer(
-            f"🔒 У тебя нет доступа к кодам @{owner['username']}!", 
+            f"🔒 У тебя нет доступа к кодам @{owner_username}!", 
             show_alert=True
         )
         return
@@ -575,12 +608,13 @@ async def callback_get_code(callback: CallbackQuery):
     await callback.answer("Ищу код...")
     
     # Создаём временное сообщение для обработки
+    owner_username = owner.get('username', 'unknown') if isinstance(owner, dict) else 'unknown'
     await callback.message.edit_text(
-        format_progress_message('searching', f"Ищу код в почте @{owner['username']}...")
+        format_progress_message('searching', f"Ищу код в почте @{owner_username}...")
     )
     
     # Обрабатываем получение кода
-    await process_get_code(callback.message, owner['username'], requester)
+    await process_get_code(callback.message, owner_username, requester)
 
 
 @router.callback_query(F.data.startswith("get_code_page_"))
