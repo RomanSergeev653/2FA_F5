@@ -206,30 +206,46 @@ def sanitize_error_message(error: Exception) -> str:
     Очистить сообщение об ошибке от чувствительной информации.
     
     Args:
-        error: Объект исключения
+        error: Объект исключения (может быть любым объектом)
         
     Returns:
         str: Безопасное сообщение об ошибке
     """
-    error_type = type(error).__name__
-    error_message = str(error)
+    # Безопасно получаем тип ошибки
+    try:
+        error_type = type(error).__name__
+    except Exception:
+        error_type = "UnknownError"
     
-    # Удаляем чувствительную информацию
-    sensitive_patterns = [
-        r'password[=:]\s*\S+',
-        r'token[=:]\s*\S+',
-        r'key[=:]\s*\S+',
-        r'secret[=:]\s*\S+',
-        r'C:\\Users\\[^\\]+',
-        r'/home/[^/]+',
-        r'\.env',
-        r'\.db',
-    ]
+    # Безопасно получаем сообщение об ошибке
+    try:
+        if hasattr(error, '__str__'):
+            error_message = str(error)
+        else:
+            error_message = repr(error)
+    except Exception:
+        error_message = "Не удалось получить описание ошибки"
     
-    for pattern in sensitive_patterns:
-        error_message = re.sub(pattern, '[REDACTED]', error_message, flags=re.IGNORECASE)
+    # Удаляем чувствительную информацию только если error_message - строка
+    if isinstance(error_message, str):
+        sensitive_patterns = [
+            r'password[=:]\s*\S+',
+            r'token[=:]\s*\S+',
+            r'key[=:]\s*\S+',
+            r'secret[=:]\s*\S+',
+            r'C:\\Users\\[^\\]+',
+            r'/home/[^/]+',
+            r'\.env',
+            r'\.db',
+        ]
+        
+        try:
+            for pattern in sensitive_patterns:
+                error_message = re.sub(pattern, '[REDACTED]', error_message, flags=re.IGNORECASE)
+        except Exception:
+            pass  # Игнорируем ошибки regex
     
-    # Возвращаем общее сообщение без деталей
+    # Возвращаем общее сообщение с типом ошибки
     return f"Произошла ошибка ({error_type}). Обратитесь к администратору."
 
 
