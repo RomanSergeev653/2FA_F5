@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database.db_manager import db
+from database.models import get_connection
 
 # Создаём логгер для этого модуля
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ async def cmd_request_access(message: Message, state: FSMContext):
         # Нет аргументов - показываем список зарегистрированных пользователей
         # Получаем всех пользователей кроме себя
         try:
-            conn = db.get_connection()
+            conn = get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -288,7 +289,7 @@ async def process_approve(callback: CallbackQuery):
     # Проверяем, существует ли pending запрос от этого requester_id к owner_id
     try:
         logger.debug(f"🔍 [PERM_APPROVE] Проверка pending запроса в БД...")
-        conn = db.get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('''
             SELECT status FROM permissions
@@ -386,7 +387,7 @@ async def process_deny(callback: CallbackQuery):
     # КРИТИЧНО: Проверяем, что это действительно запрос к кодам этого владельца
     try:
         logger.debug(f"🔍 [PERM_DENY] Проверка pending запроса в БД...")
-        conn = db.get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('''
             SELECT status FROM permissions
@@ -603,7 +604,7 @@ async def cmd_pending_requests(message: Message):
         return
 
     try:
-        conn = db.get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Получаем pending запросы
@@ -779,7 +780,7 @@ async def callback_request_access_page(callback: CallbackQuery):
     
     # Получаем всех пользователей кроме себя
     try:
-        conn = db.get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
         
         cursor.execute('''
