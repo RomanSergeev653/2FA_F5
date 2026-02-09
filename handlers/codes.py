@@ -1,3 +1,4 @@
+import logging
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -6,6 +7,9 @@ from aiogram.fsm.state import State, StatesGroup
 import time
 
 from database.db_manager import db
+
+# Создаём логгер для этого модуля
+logger = logging.getLogger(__name__)
 from utils.encryption import decrypt_password
 from utils.email_parser import EmailParser
 from utils.keyboards import (
@@ -62,11 +66,15 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
     """
     requester_id = requester.get('telegram_id') if requester and isinstance(requester, dict) else None
     if not requester_id:
+        logger.error(f"❌ [GET_CODE] Не удалось получить requester_id из requester: {type(requester)}")
         await message.answer("❌ Ошибка: не удалось получить ID пользователя")
         return
     
+    requester_username = requester.get('username', 'unknown') if isinstance(requester, dict) else 'unknown'
     target_input = target_input.lstrip('@')
     is_email_input = is_email(target_input)
+    
+    logger.info(f"🔍 [GET_CODE] Начало обработки. Requester: {requester_id} (@{requester_username}), Target: {target_input} (email: {is_email_input})")
 
     # Проверяем, не пытается ли получить свой код (бессмысленно)
     if is_email_input:
@@ -91,6 +99,7 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             return
 
     # Ищем владельца кодов в БД
+    logger.debug(f"🔍 [GET_CODE] Поиск owner в БД по {'email' if is_email_input else 'username'}: {target_input}")
     if is_email_input:
         owner = db.get_user_by_email(target_input)
         not_found_message = (
@@ -113,6 +122,7 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         )
 
     if not owner or not isinstance(owner, dict):
+        logger.warning(f"⚠️  [GET_CODE] Owner не найден. Target: {target_input}, Requester: {requester_id}")
         await message.answer(not_found_message)
         return
 
@@ -120,13 +130,18 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
     owner_username = owner.get('username', 'unknown')
     
     if not owner_id:
+        logger.error(f"❌ [GET_CODE] Не удалось получить owner_id из owner: {type(owner)}")
         await message.answer("❌ Ошибка: не удалось получить ID владельца")
         return
 
+    logger.info(f"👤 [GET_CODE] Owner найден: {owner_id} (@{owner_username})")
+
     # Проверяем разрешение
+    logger.debug(f"🔐 [GET_CODE] Проверка разрешения: Owner {owner_id} → Requester {requester_id}")
     has_permission = db.check_permission(owner_id, requester_id)
 
     if not has_permission:
+        logger.warning(f"🔒 [GET_CODE] Доступ запрещён. Owner: {owner_id} (@{owner_username}) → Requester: {requester_id} (@{requester_username})")
         await message.answer(
             f"🔒 <b>Доступ запрещён!</b>\n\n"
             f"У тебя нет разрешения на получение кодов от @{owner_username}\n\n"
@@ -134,6 +149,8 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
             f"<code>/request_access @{owner_username}</code>"
         )
         return
+
+    logger.info(f"✅ [GET_CODE] Разрешение подтверждено. Начинаю поиск кода...")
 
     # Отправляем сообщение о поиске с прогрессом
     start_time = time.time()
@@ -148,15 +165,18 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
         provider = owner.get('email_provider', '')
         
         if not email or not encrypted_password or not provider:
+            logger.error(f"❌ [GET_CODE] Неполные данные owner в БД. Email: {bool(email)}, Password: {bool(encrypted_password)}, Provider: {bool(provider)}")
             await searching_msg.edit_text(
                 "❌ Ошибка: неполные данные пользователя в базе данных"
             )
             return
         
+        logger.debug(f"🔓 [GET_CODE] Расшифрование пароля для {email} ({provider})...")
         password = decrypt_password(encrypted_password)
+        logger.debug(f"✅ [GET_CODE] Пароль расшифрован")
 
     except Exception as e:
-        print(f"❌ Ошибка расшифрования пароля: {e}")
+        logger.error(f"❌ [GET_CODE] Ошибка расшифрования пароля: {type(e).__name__}: {e}", exc_info=True)
         from utils.security import sanitize_error_message
         safe_error = sanitize_error_message(e)
         await searching_msg.edit_text(
@@ -167,10 +187,13 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
 
     # Подключаемся к почте и ищем код
     try:
+        logger.info(f"📧 [GET_CODE] Подключение к почте {email} ({provider})...")
         parser = EmailParser(email, password, provider)
         code = parser.get_latest_code()
 
         if code:
+            search_time = time.time() - start_time
+            logger.info(f"✅ [GET_CODE] Код найден! Время поиска: {search_time:.2f}с. Owner: @{owner_username}, Requester: @{requester_username}")
             # Код найден!
             search_time = time.time() - start_time
             result_text = format_code_result(
@@ -214,14 +237,16 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
                     )
                 )
             except Exception as e:
-                print(f"⚠️ Не удалось уведомить владельца: {e}")
+                logger.warning(f"⚠️  [GET_CODE] Не удалось уведомить владельца: {type(e).__name__}: {e}")
 
             owner_username_log = owner.get('username', 'unknown') if isinstance(owner, dict) else 'unknown'
             requester_username_log = requester.get('username', 'unknown') if isinstance(requester, dict) else 'unknown'
-            print(f"✅ Код передан: {owner_username_log} → {requester_username_log} | Код: НЕ ЛОГИРУЕТСЯ")
+            logger.info(f"✅ [GET_CODE] Код передан: @{owner_username_log} → @{requester_username_log} (код не логируется)")
 
         else:
             # Код не найден
+            search_time = time.time() - start_time
+            logger.warning(f"⚠️  [GET_CODE] Код не найден. Время поиска: {search_time:.2f}с. Owner: @{owner_username}, Requester: @{requester_username}")
             suggestions = [
                 "Подождать несколько секунд",
                 "Попросить коллегу запросить новый код",
@@ -242,9 +267,6 @@ async def process_get_code(message: Message, target_input: str, requester: dict)
                 parse_mode='HTML',
                 reply_markup=keyboard
             )
-
-            owner_username_log = owner.get('username', 'unknown') if isinstance(owner, dict) else 'unknown'
-            print(f"⚠️ Код не найден для {owner_username_log}")
 
     except Exception as e:
         # Логируем полную ошибку для администратора
@@ -453,7 +475,7 @@ async def cmd_check_email(message: Message):
 
     except Exception as e:
         # Логируем полную ошибку
-        print(f"❌ Ошибка проверки почты: {e}")
+        logger.error(f"❌ [CHECK_EMAIL] Ошибка проверки почты: {type(e).__name__}: {e}", exc_info=True)
         
         # Пользователю показываем безопасное, но информативное сообщение
         safe_error = sanitize_error_message(e)
@@ -528,7 +550,7 @@ async def cmd_test_code(message: Message):
 
     except Exception as e:
         # Логируем полную ошибку
-        print(f"❌ Ошибка теста: {e}")
+        logger.error(f"❌ [MY_CODE] Ошибка теста: {type(e).__name__}: {e}", exc_info=True)
         
         # Пользователю показываем безопасное сообщение
         safe_error = sanitize_error_message(e)

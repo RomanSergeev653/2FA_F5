@@ -24,52 +24,62 @@ async def main():
     if DEBUG:
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            format='%(asctime)s - [%(name)s] - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
         )
     else:
-        logging.basicConfig(level=logging.WARNING)
-
-    print("=" * 50)
-    print("🤖 Запуск Telegram бота для 2FA кодов")
-    print("=" * 50)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - [%(levelname)s] - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    
+    logger = logging.getLogger(__name__)
+    logger.info("=" * 60)
+    logger.info("🤖 Запуск Telegram бота для 2FA кодов")
+    logger.info("=" * 60)
 
     # Инициализируем базу данных
-    print("\n📦 Инициализация базы данных...")
+    logger.info("📦 Инициализация базы данных...")
     init_database()
+    logger.info("✅ База данных готова")
 
     # Создаём бота и диспетчер
-    print("\n🔧 Создание бота...")
+    logger.info("🔧 Создание бота...")
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
+    logger.info("✅ Бот создан")
 
     dp = Dispatcher()
 
     # Подключаем роутеры (обработчики команд)
-    print("📝 Подключение обработчиков...")
+    logger.info("📝 Подключение обработчиков...")
     dp.include_router(start.router)
     dp.include_router(registration.router)
     dp.include_router(permissions.router)
     dp.include_router(codes.router)
+    logger.info("✅ Все обработчики подключены")
 
-    print("\n✅ Бот готов к работе!")
-    print("Нажми Ctrl+C для остановки\n")
+    logger.info("✅ Бот готов к работе!")
+    logger.info("Нажми Ctrl+C для остановки\n")
 
     # Запускаем polling (бот начинает получать сообщения)
     try:
         # Пропускаем все накопившиеся сообщения
+        logger.info("⏭️  Пропускаю старые сообщения...")
         await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Старые сообщения пропущены")
 
-        print("⏭️  Все старые сообщения пропущены")
-
+        logger.info("🚀 Бот запущен и ожидает сообщения...")
         await dp.start_polling(bot)
 
     except KeyboardInterrupt:
-        print("\n\n👋 Остановка бота...")
+        logger.info("\n👋 Остановка бота...")
     finally:
         await bot.session.close()
-        print("✅ Бот остановлен")
+        logger.info("✅ Бот остановлен")
 
 def check_existing_instances():
     """

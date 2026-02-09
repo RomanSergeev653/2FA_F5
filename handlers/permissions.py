@@ -1,3 +1,4 @@
+import logging
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -6,6 +7,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database.db_manager import db
+
+# Создаём логгер для этого модуля
+logger = logging.getLogger(__name__)
 from utils.keyboards import (
     create_permissions_keyboard,
     create_user_list_keyboard,
@@ -59,6 +63,7 @@ async def cmd_request_access(message: Message, state: FSMContext):
         state: Контекст состояния
     """
     requester_id = message.from_user.id
+    logger.info(f"📝 [REQUEST_ACCESS] Команда от пользователя {requester_id}")
 
     # Проверяем rate limit
     allowed, remaining = check_rate_limit(
@@ -123,7 +128,7 @@ async def cmd_request_access(message: Message, state: FSMContext):
             
         except Exception as e:
             # Логируем полную ошибку
-            print(f"❌ Ошибка получения списка пользователей: {e}")
+            logger.error(f"❌ [REQUEST_ACCESS] Ошибка получения списка пользователей: {type(e).__name__}: {e}", exc_info=True)
             
             # Пользователю показываем безопасное, но более информативное сообщение
             safe_error = sanitize_error_message(e)
@@ -249,10 +254,10 @@ async def cmd_request_access(message: Message, state: FSMContext):
             f"Ожидай ответа."
         )
 
-        print(f"📤 Запрос доступа: {requester_username} → @{owner_username}")
+        logger.info(f"📤 [REQUEST_ACCESS] Запрос доступа отправлен: @{requester_username} → @{owner_username}")
 
     except Exception as e:
-        print(f"❌ Ошибка отправки уведомления: {e}")
+        logger.error(f"❌ [REQUEST_ACCESS] Ошибка отправки уведомления: {type(e).__name__}: {e}", exc_info=True)
         await message.answer(
             "⚠️ Запрос создан, но не удалось уведомить коллегу.\n"
             "Свяжись с ним напрямую."
@@ -268,16 +273,21 @@ async def process_approve(callback: CallbackQuery):
         callback: Callback от нажатия кнопки
     """
     owner_id = callback.from_user.id
+    logger.info(f"🔔 [PERM_APPROVE] Начало обработки. Owner ID: {owner_id}, Callback data: {callback.data}")
     
     # Безопасно извлекаем ID запрашивающего
     requester_id = validate_callback_data(callback.data, "perm_approve_")
     if not requester_id:
+        logger.warning(f"⚠️  [PERM_APPROVE] Неверный callback data от owner {owner_id}")
         await callback.answer("❌ Неверный запрос!", show_alert=True)
         return
+    
+    logger.info(f"📋 [PERM_APPROVE] Requester ID: {requester_id}, Owner ID: {owner_id}")
     
     # КРИТИЧНО: Проверяем, что это действительно запрос к кодам этого владельца
     # Проверяем, существует ли pending запрос от этого requester_id к owner_id
     try:
+        logger.debug(f"🔍 [PERM_APPROVE] Проверка pending запроса в БД...")
         conn = db.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -288,10 +298,13 @@ async def process_approve(callback: CallbackQuery):
         conn.close()
         
         if not pending_request:
+            logger.warning(f"⚠️  [PERM_APPROVE] Запрос не найден или уже обработан. Owner: {owner_id}, Requester: {requester_id}")
             await callback.answer("❌ Запрос не найден или уже обработан!", show_alert=True)
             return
+        
+        logger.info(f"✅ [PERM_APPROVE] Pending запрос найден в БД")
     except Exception as e:
-        print(f"❌ Ошибка проверки запроса: {e}")
+        logger.error(f"❌ [PERM_APPROVE] Ошибка проверки запроса в БД: {type(e).__name__}: {e}", exc_info=True)
         # Показываем безопасное, но информативное сообщение пользователю
         safe_error = sanitize_error_message(e)
         await callback.answer(
@@ -301,13 +314,18 @@ async def process_approve(callback: CallbackQuery):
         return
 
     # Обновляем статус в БД
+    logger.info(f"💾 [PERM_APPROVE] Обновление статуса в БД на 'approved'...")
     db.update_permission(owner_id, requester_id, 'approved')
+    logger.info(f"✅ [PERM_APPROVE] Статус обновлён в БД")
 
     # Получаем данные запрашивающего
+    logger.debug(f"👤 [PERM_APPROVE] Получение данных requester (ID: {requester_id})...")
     requester = db.get_user_by_telegram_id(requester_id)
     requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
+    logger.info(f"👤 [PERM_APPROVE] Requester username: @{requester_username}")
 
     # Обновляем сообщение
+    logger.debug(f"✏️  [PERM_APPROVE] Обновление сообщения для owner...")
     await callback.message.edit_text(
         f"✅ <b>Доступ разрешён</b>\n\n"
         f"Пользователь @{requester_username} теперь может получать твои 2FA коды.\n\n"
@@ -317,6 +335,7 @@ async def process_approve(callback: CallbackQuery):
 
     # Уведомляем запрашивающего
     try:
+        logger.debug(f"📤 [PERM_APPROVE] Отправка уведомления requester (ID: {requester_id})...")
         bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
@@ -334,12 +353,14 @@ async def process_approve(callback: CallbackQuery):
                     f"<code>/get_code {owner_email}</code>"
                 )
             )
+            logger.info(f"✅ [PERM_APPROVE] Уведомление отправлено requester @{requester_username}")
+        else:
+            logger.warning(f"⚠️  [PERM_APPROVE] Не удалось получить данные owner (ID: {owner_id})")
     except Exception as e:
-        print(f"❌ Ошибка уведомления запрашивающего: {e}")
+        logger.error(f"❌ [PERM_APPROVE] Ошибка уведомления requester: {type(e).__name__}: {e}", exc_info=True)
 
     await callback.answer("✅ Доступ разрешён")
-
-    print(f"✅ Разрешение: {owner_id} → {requester_id}")
+    logger.info(f"✅ [PERM_APPROVE] Успешно завершено. Owner: {owner_id} → Requester: {requester_id} (@{requester_username})")
 
 
 @router.callback_query(F.data.startswith('perm_deny_'))
@@ -351,15 +372,20 @@ async def process_deny(callback: CallbackQuery):
         callback: Callback от нажатия кнопки
     """
     owner_id = callback.from_user.id
+    logger.info(f"🔔 [PERM_DENY] Начало обработки. Owner ID: {owner_id}, Callback data: {callback.data}")
     
     # Безопасно извлекаем ID запрашивающего
     requester_id = validate_callback_data(callback.data, "perm_deny_")
     if not requester_id:
+        logger.warning(f"⚠️  [PERM_DENY] Неверный callback data от owner {owner_id}")
         await callback.answer("❌ Неверный запрос!", show_alert=True)
         return
     
+    logger.info(f"📋 [PERM_DENY] Requester ID: {requester_id}, Owner ID: {owner_id}")
+    
     # КРИТИЧНО: Проверяем, что это действительно запрос к кодам этого владельца
     try:
+        logger.debug(f"🔍 [PERM_DENY] Проверка pending запроса в БД...")
         conn = db.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -370,10 +396,13 @@ async def process_deny(callback: CallbackQuery):
         conn.close()
         
         if not pending_request:
+            logger.warning(f"⚠️  [PERM_DENY] Запрос не найден или уже обработан. Owner: {owner_id}, Requester: {requester_id}")
             await callback.answer("❌ Запрос не найден или уже обработан!", show_alert=True)
             return
+        
+        logger.info(f"✅ [PERM_DENY] Pending запрос найден в БД")
     except Exception as e:
-        print(f"❌ Ошибка проверки запроса: {e}")
+        logger.error(f"❌ [PERM_DENY] Ошибка проверки запроса в БД: {type(e).__name__}: {e}", exc_info=True)
         # Показываем безопасное, но информативное сообщение пользователю
         safe_error = sanitize_error_message(e)
         await callback.answer(
@@ -383,13 +412,18 @@ async def process_deny(callback: CallbackQuery):
         return
 
     # Обновляем статус в БД
+    logger.info(f"💾 [PERM_DENY] Обновление статуса в БД на 'denied'...")
     db.update_permission(owner_id, requester_id, 'denied')
+    logger.info(f"✅ [PERM_DENY] Статус обновлён в БД")
 
     # Получаем данные запрашивающего
+    logger.debug(f"👤 [PERM_DENY] Получение данных requester (ID: {requester_id})...")
     requester = db.get_user_by_telegram_id(requester_id)
     requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
+    logger.info(f"👤 [PERM_DENY] Requester username: @{requester_username}")
 
     # Обновляем сообщение
+    logger.debug(f"✏️  [PERM_DENY] Обновление сообщения для owner...")
     await callback.message.edit_text(
         f"❌ <b>Доступ запрещён</b>\n\n"
         f"Ты отклонил запрос от @{requester_username}."
@@ -397,6 +431,7 @@ async def process_deny(callback: CallbackQuery):
 
     # Уведомляем запрашивающего
     try:
+        logger.debug(f"📤 [PERM_DENY] Отправка уведомления requester (ID: {requester_id})...")
         bot_instance = callback.bot
 
         owner = db.get_user_by_telegram_id(owner_id)
@@ -409,12 +444,12 @@ async def process_deny(callback: CallbackQuery):
                 f"@{owner_username} отклонил твой запрос на доступ к кодам."
             )
         )
+        logger.info(f"✅ [PERM_DENY] Уведомление отправлено requester @{requester_username}")
     except Exception as e:
-        print(f"❌ Ошибка уведомления запрашивающего: {e}")
+        logger.error(f"❌ [PERM_DENY] Ошибка уведомления requester: {type(e).__name__}: {e}", exc_info=True)
 
     await callback.answer("❌ Доступ запрещён")
-
-    print(f"❌ Отказано: {owner_id} → {requester_id}")
+    logger.info(f"✅ [PERM_DENY] Успешно завершено. Owner: {owner_id} → Requester: {requester_id} (@{requester_username})")
 
 
 @router.message(Command('my_permissions'))
@@ -546,7 +581,7 @@ async def cmd_revoke(message: Message):
         except:
             pass
 
-        print(f"🔒 Отозван доступ: {owner_id} ⇢ {requester_id}")
+        logger.info(f"🔒 [REVOKE] Отозван доступ: Owner {owner_id} → Requester {requester_id}")
     else:
         await message.answer(f"⚠️ У @{target_username} не было доступа к твоим кодам.")
 
@@ -605,7 +640,7 @@ async def cmd_pending_requests(message: Message):
         await message.answer(text)
 
     except Exception as e:
-        print(f"❌ Ошибка получения pending запросов: {e}")
+        logger.error(f"❌ [PENDING_REQUESTS] Ошибка получения pending запросов: {type(e).__name__}: {e}", exc_info=True)
         safe_error = sanitize_error_message(e)
         await message.answer(
             "❌ Ошибка получения данных.\n\n"
@@ -708,7 +743,7 @@ async def callback_request_access(callback: CallbackQuery):
         )
         
     except Exception as e:
-        print(f"❌ Ошибка отправки уведомления: {e}")
+        logger.error(f"❌ [REQUEST_ACCESS_CALLBACK] Ошибка отправки уведомления: {type(e).__name__}: {e}", exc_info=True)
         safe_error = sanitize_error_message(e)
         await callback.answer(
             "⚠️ Запрос создан, но не удалось уведомить коллегу.\n"
@@ -788,7 +823,7 @@ async def callback_request_access_page(callback: CallbackQuery):
         
     except Exception as e:
         # Логируем полную ошибку
-        print(f"❌ Ошибка получения списка пользователей: {e}")
+        logger.error(f"❌ [REQUEST_ACCESS_PAGE] Ошибка получения списка пользователей: {type(e).__name__}: {e}", exc_info=True)
         safe_error = sanitize_error_message(e)
         await callback.answer(
             f"❌ Ошибка получения списка.\n{safe_error}",
