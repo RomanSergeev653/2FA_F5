@@ -77,3 +77,4 @@ desktop.ini
 
 # Docker
 .dockerignore
+/.idea
