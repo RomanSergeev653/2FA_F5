@@ -1,8 +1,10 @@
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
 from config import MESSAGES
 from database.db_manager import db
+from handlers.registration import RegistrationStates, prompt_registration
 from utils.keyboards import (
     create_main_menu_keyboard,
     create_help_keyboard
@@ -166,13 +168,14 @@ async def callback_menu_main(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "menu_register")
-async def callback_menu_register(callback: CallbackQuery):
+async def callback_menu_register(callback: CallbackQuery, state: FSMContext):
     """Обработчик кнопки 'Зарегистрироваться'"""
-    await callback.answer("Используй команду /register")
-    await callback.message.answer(
-        text=MESSAGES['register_start'],
-        parse_mode='HTML'
-    )
+    await callback.answer()
+
+    async def send_text(text: str) -> None:
+        await callback.message.answer(text)
+
+    await prompt_registration(callback.from_user.id, state, send_text)
 
 
 @router.callback_query(F.data == "menu_get_code")
@@ -274,7 +277,7 @@ async def callback_menu_refresh(callback: CallbackQuery):
 
 # Обработчики callback для help
 @router.callback_query(F.data.startswith("help_"))
-async def callback_help_section(callback: CallbackQuery):
+async def callback_help_section(callback: CallbackQuery, state: FSMContext):
     """Обработчик разделов справки"""
     section = callback.data.replace("help_", "", 1)
     
@@ -293,3 +296,6 @@ async def callback_help_section(callback: CallbackQuery):
         reply_markup=keyboard
     )
     await callback.answer()
+
+    if section == 'register' and not db.get_user_by_telegram_id(callback.from_user.id):
+        await state.set_state(RegistrationStates.waiting_for_email_data)

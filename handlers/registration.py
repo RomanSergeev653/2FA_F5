@@ -1,3 +1,5 @@
+from typing import Awaitable, Callable
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -39,6 +41,39 @@ class RegistrationStates(StatesGroup):
     choosing_provider = State()  # Выбор провайдера для неизвестного домена
 
 
+async def prompt_registration(
+    user_id: int,
+    state: FSMContext,
+    send_text: Callable[[str], Awaitable],
+) -> bool:
+    """
+    Показать инструкцию и перевести пользователя в режим ожидания данных.
+    Returns True если регистрация начата.
+    """
+    allowed, remaining = check_rate_limit(user_id, 'register', *RATE_LIMITS['register'])
+    if not allowed:
+        await send_text(
+            f"⏳ <b>Слишком много попыток регистрации!</b>\n\n"
+            f"Подожди {remaining} секунд перед следующей попыткой."
+        )
+        return False
+
+    existing_user = db.get_user_by_telegram_id(user_id)
+    if existing_user:
+        await send_text(
+            "⚠️ Ты уже зарегистрирован!\n\n"
+            f"📧 Email: <code>{existing_user['email']}</code>\n"
+            f"🏢 Провайдер: {existing_user['email_provider']}\n\n"
+            "Если хочешь изменить данные, сначала используй /unregister"
+        )
+        return False
+
+    await send_text(MESSAGES['register_start'])
+    await state.set_state(RegistrationStates.waiting_for_email_data)
+    logger.info(f"📝 Пользователь {user_id} начал регистрацию")
+    return True
+
+
 @router.message(Command('register'))
 async def cmd_register(message: Message, state: FSMContext):
     """
@@ -47,34 +82,10 @@ async def cmd_register(message: Message, state: FSMContext):
     """
     user_id = message.from_user.id
 
-    # Проверяем rate limit
-    allowed, remaining = check_rate_limit(user_id, 'register', *RATE_LIMITS['register'])
-    if not allowed:
-        await message.answer(
-            f"⏳ <b>Слишком много попыток регистрации!</b>\n\n"
-            f"Подожди {remaining} секунд перед следующей попыткой."
-        )
-        return
+    async def send_text(text: str) -> None:
+        await message.answer(text)
 
-    # Проверяем, не зарегистрирован ли уже
-    existing_user = db.get_user_by_telegram_id(user_id)
-
-    if existing_user:
-        await message.answer(
-            "⚠️ Ты уже зарегистрирован!\n\n"
-            f"📧 Email: <code>{existing_user['email']}</code>\n"
-            f"🏢 Провайдер: {existing_user['email_provider']}\n\n"
-            "Если хочешь изменить данные, сначала используй /unregister"
-        )
-        return
-
-    # Отправляем инструкцию
-    await message.answer(MESSAGES['register_start'])
-
-    # Переводим пользователя в состояние ожидания данных
-    await state.set_state(RegistrationStates.waiting_for_email_data)
-
-    logger.info(f"📝 Пользователь {user_id} начал регистрацию")
+    await prompt_registration(user_id, state, send_text)
 
 
 @router.message(RegistrationStates.waiting_for_email_data)
@@ -352,6 +363,17 @@ async def complete_registration(message: Message, state: FSMContext,
     await state.clear()
 
     logger.info(f"✅ Пользователь {user_id} ({username}) зарегистрирован с {email} ({provider})")
+
+
+@router.callback_query(F.data == 'retry_register')
+async def callback_retry_register(callback: CallbackQuery, state: FSMContext):
+    """Повторная попытка регистрации после ошибки."""
+    await callback.answer()
+
+    async def send_text(text: str) -> None:
+        await callback.message.answer(text)
+
+    await prompt_registration(callback.from_user.id, state, send_text)
 
 
 @router.callback_query(F.data == 'register_cancel')
