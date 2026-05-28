@@ -362,6 +362,37 @@ def format_help_section(section: str) -> str:
     return sections.get(section, "Раздел не найден")
 
 
+def _plural_people(n: int) -> str:
+    """Склонение «человек» для русского языка."""
+    if n % 10 == 1 and n % 100 != 11:
+        return "человек"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
+        return "человека"
+    return "человек"
+
+
+def format_request_access_hint(registered_count: int) -> str:
+    """
+    Подсказка для /request_access без аргументов (без раскрытия списка пользователей).
+    """
+    word = _plural_people(registered_count)
+    return (
+        f"➕ <b>Запросить доступ</b>\n\n"
+        f"Нас уже {registered_count} {word}!\n\n"
+        f"Запроси доступ у своего коллеги командой:\n"
+        f"<code>/request_access @username</code>\n"
+        f"или\n"
+        f"<code>/request_access email@example.com</code>"
+    )
+
+
+REQUEST_ACCESS_SOLO_MESSAGE = (
+    "📭 <b>Пока только ты</b>\n\n"
+    "В боте зарегистрирован только ты.\n"
+    "Попроси коллег зарегистрироваться через /register"
+)
+
+
 def format_user_list_message(
     users: List[Dict],
     action: str = "get_code",

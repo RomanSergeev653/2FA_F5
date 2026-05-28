@@ -150,6 +150,20 @@ class DatabaseManager:
             return None
 
     @staticmethod
+    def count_registered_users() -> int:
+        """Количество зарегистрированных пользователей в боте."""
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM users')
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
+        except Exception as e:
+            print(f"❌ Ошибка подсчёта пользователей: {e}")
+            raise
+
+    @staticmethod
     def update_last_code_request(telegram_id: int):
         """
         Обновить время последнего запроса кода.

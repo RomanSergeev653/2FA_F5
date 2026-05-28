@@ -13,13 +13,13 @@ from database.models import get_connection
 logger = logging.getLogger(__name__)
 from utils.keyboards import (
     create_permissions_keyboard,
-    create_user_list_keyboard,
     create_confirm_keyboard
 )
 from utils.messages import (
     format_permission_request,
     format_permission_granted,
-    format_user_list_message
+    format_request_access_hint,
+    REQUEST_ACCESS_SOLO_MESSAGE,
 )
 from utils.security import (
     validate_callback_data,
@@ -92,54 +92,31 @@ async def cmd_request_access(message: Message, state: FSMContext):
     args = message.text.split()
 
     if len(args) < 2:
-        # Нет аргументов - показываем список зарегистрированных пользователей
-        # Получаем всех пользователей кроме себя
         try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT telegram_id, username, email
-                FROM users
-                WHERE telegram_id != ?
-                ORDER BY username
-            ''', (requester_id,))
-            
-            all_users = [dict(row) for row in cursor.fetchall()]
-            conn.close()
-            
-            if not all_users:
-                await message.answer(
-                    "📭 <b>Нет других пользователей</b>\n\n"
-                    "В боте пока только ты зарегистрирован.\n"
-                    "Попроси коллег зарегистрироваться через /register"
-                )
-                return
-            
-            # Формируем список пользователей
-            list_text = format_user_list_message(all_users, action="request_access")
-            keyboard = create_user_list_keyboard(all_users, action="request_access")
-            
-            await message.answer(
-                text=list_text,
-                parse_mode='HTML',
-                reply_markup=keyboard
-            )
-            return
-            
+            total = db.count_registered_users()
         except Exception as e:
-            # Логируем полную ошибку
-            logger.error(f"❌ [REQUEST_ACCESS] Ошибка получения списка пользователей: {type(e).__name__}: {e}", exc_info=True)
-            
-            # Пользователю показываем безопасное, но более информативное сообщение
+            logger.error(
+                f"❌ [REQUEST_ACCESS] Ошибка подсчёта пользователей: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
             safe_error = sanitize_error_message(e)
             await message.answer(
-                "❌ Ошибка получения списка пользователей.\n\n"
+                "❌ Не удалось получить статистику бота.\n\n"
                 f"{safe_error}\n\n"
-                "Попробуй указать username или email напрямую:\n"
+                "Укажи username или email напрямую:\n"
                 "<code>/request_access @username</code>"
             )
             return
+
+        if total <= 1:
+            await message.answer(REQUEST_ACCESS_SOLO_MESSAGE, parse_mode='HTML')
+            return
+
+        await message.answer(
+            format_request_access_hint(total),
+            parse_mode='HTML',
+        )
+        return
 
     target_input = args[1].lstrip('@')
     is_email_input = is_email(target_input)
@@ -646,189 +623,6 @@ async def cmd_pending_requests(message: Message):
         await message.answer(
             "❌ Ошибка получения данных.\n\n"
             f"{safe_error}"
-        )
-
-
-# Обработчики callback для кнопок разрешений
-@router.callback_query(F.data.startswith("request_access_"))
-async def callback_request_access(callback: CallbackQuery):
-    """
-    Обработчик кнопки запроса доступа из списка пользователей.
-    """
-    requester_id = callback.from_user.id
-    
-    # Проверяем регистрацию
-    requester = db.get_user_by_telegram_id(requester_id)
-    if not requester:
-        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
-        return
-    
-    # Безопасно извлекаем ID владельца
-    owner_id = validate_callback_data(callback.data, "request_access_")
-    if not owner_id:
-        await callback.answer("❌ Неверный запрос!", show_alert=True)
-        return
-    
-    owner = db.get_user_by_telegram_id(owner_id)
-    if not owner:
-        await callback.answer("Пользователь не найден!", show_alert=True)
-        return
-    
-    # Проверяем, не себя ли запрашивает
-    if owner_id == requester_id:
-        await callback.answer("Нельзя запросить доступ к своим кодам!", show_alert=True)
-        return
-    
-    # Проверяем rate limit
-    allowed, remaining = check_rate_limit(
-        requester_id, 
-        'request_access', 
-        *RATE_LIMITS['request_access']
-    )
-    if not allowed:
-        await callback.answer(
-            f"⏳ Слишком много запросов! Подожди {remaining} сек.", 
-            show_alert=True
-        )
-        return
-    
-    # Проверяем, нет ли уже разрешения
-    if db.check_permission(owner_id, requester_id):
-        await callback.answer("У тебя уже есть доступ!", show_alert=True)
-        return
-    
-    # Создаём запрос
-    success = db.create_permission_request(owner_id, requester_id)
-    
-    if not success:
-        await callback.answer("Запрос уже отправлен ранее!", show_alert=True)
-        return
-    
-    # Отправляем уведомление владельцу
-    requester_username = requester.get('username', 'unknown') if requester and isinstance(requester, dict) else 'unknown'
-    requester_email = requester.get('email', 'N/A') if requester and isinstance(requester, dict) else 'N/A'
-    requester_name = callback.from_user.first_name or requester_username
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="✅ Разрешить",
-                callback_data=f"perm_approve_{requester_id}"
-            ),
-            InlineKeyboardButton(
-                text="❌ Запретить",
-                callback_data=f"perm_deny_{requester_id}"
-            )
-        ]
-    ])
-    
-    try:
-        bot_instance = callback.bot
-        notification_text = format_permission_request(
-            requester_username=requester_username,
-            requester_name=requester_name,
-            requester_email=requester_email
-        )
-        
-        await bot_instance.send_message(
-            chat_id=owner_id,
-            text=notification_text,
-            reply_markup=keyboard
-        )
-        
-        await callback.answer("✅ Запрос отправлен!")
-        owner_username = owner.get('username', 'unknown') if owner and isinstance(owner, dict) else 'unknown'
-        await callback.message.edit_text(
-            f"✅ Запрос отправлен @{owner_username}!\n"
-            f"Ожидай ответа."
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ [REQUEST_ACCESS_CALLBACK] Ошибка отправки уведомления: {type(e).__name__}: {e}", exc_info=True)
-        safe_error = sanitize_error_message(e)
-        await callback.answer(
-            "⚠️ Запрос создан, но не удалось уведомить коллегу.\n"
-            f"{safe_error}",
-            show_alert=True
-        )
-
-
-@router.callback_query(F.data.startswith("request_access_page_"))
-async def callback_request_access_page(callback: CallbackQuery):
-    """
-    Обработчик пагинации списка пользователей для запроса доступа.
-    """
-    requester_id = callback.from_user.id
-    requester = db.get_user_by_telegram_id(requester_id)
-    
-    if not requester:
-        await callback.answer("Сначала зарегистрируйся!", show_alert=True)
-        return
-    
-    # Безопасно извлекаем номер страницы
-    try:
-        page_str = callback.data.split("_")[-1]
-        if not page_str.isdigit():
-            await callback.answer("Неверный запрос!", show_alert=True)
-            return
-        page = int(page_str)
-        if page < 0:
-            page = 0
-    except (ValueError, IndexError):
-        await callback.answer("Неверный запрос!", show_alert=True)
-        return
-    
-    # Получаем всех пользователей кроме себя
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT telegram_id, username, email
-            FROM users
-            WHERE telegram_id != ?
-            ORDER BY username
-        ''', (requester_id,))
-        
-        all_users = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        
-        if not all_users:
-            await callback.answer("Нет других пользователей", show_alert=True)
-            return
-        
-        # Вычисляем количество страниц
-        per_page = 5
-        total_pages = (len(all_users) + per_page - 1) // per_page
-        
-        # Показываем нужную страницу
-        list_text = format_user_list_message(
-            all_users[page * per_page:(page + 1) * per_page],
-            action="request_access",
-            page=page,
-            total_pages=total_pages
-        )
-        keyboard = create_user_list_keyboard(
-            all_users,
-            action="request_access",
-            page=page,
-            per_page=per_page
-        )
-        
-        await callback.message.edit_text(
-            text=list_text,
-            parse_mode='HTML',
-            reply_markup=keyboard
-        )
-        await callback.answer()
-        
-    except Exception as e:
-        # Логируем полную ошибку
-        logger.error(f"❌ [REQUEST_ACCESS_PAGE] Ошибка получения списка пользователей: {type(e).__name__}: {e}", exc_info=True)
-        safe_error = sanitize_error_message(e)
-        await callback.answer(
-            f"❌ Ошибка получения списка.\n{safe_error}",
-            show_alert=True
         )
 
 

@@ -11,7 +11,9 @@ from utils.messages import (
     format_user_status,
     format_permissions_count,
     format_help_section,
-    format_tips_message
+    format_tips_message,
+    format_request_access_hint,
+    REQUEST_ACCESS_SOLO_MESSAGE,
 )
 
 # Создаём роутер для этого обработчика
@@ -204,16 +206,15 @@ async def callback_menu_permissions(callback: CallbackQuery):
 async def callback_menu_request_access(callback: CallbackQuery):
     """Обработчик кнопки 'Запросить доступ'"""
     await callback.answer("Используй команду /request_access")
-    await callback.message.answer(
-        text=(
-            "➕ <b>Запросить доступ</b>\n\n"
-            "Используй команду:\n"
-            "<code>/request_access @username</code>\n"
-            "или\n"
-            "<code>/request_access email@example.com</code>"
-        ),
-        parse_mode='HTML'
-    )
+    try:
+        total = db.count_registered_users()
+    except Exception:
+        total = 0
+    if total <= 1:
+        text = REQUEST_ACCESS_SOLO_MESSAGE
+    else:
+        text = format_request_access_hint(total)
+    await callback.message.answer(text=text, parse_mode='HTML')
 
 
 @router.callback_query(F.data == "menu_stats")
